@@ -1,0 +1,2738 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.kiro/
+  specs/
+    code-review-agent/
+      .config.kiro
+      design.md
+      requirements.md
+      tasks.md
+standards/
+  .gitkeep
+  clean_code.md
+  tailwind_rules.md
+tests/
+  __init__.py
+  test_agent.py
+  test_config.py
+  test_git_tool.py
+  test_jira_tool.py
+  test_rules_tool.py
+tools/
+  __init__.py
+  git_tool.py
+  jira_tool.py
+  rules_tool.py
+.env.example
+agent.py
+config.py
+main.py
+requirements.txt
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path=".kiro/specs/code-review-agent/.config.kiro">
+{"specId": "e7fdc224-9968-4e2a-a3d7-2805b1e80d2e", "workflowType": "requirements-first", "specType": "feature"}
+</file>
+
+<file path=".kiro/specs/code-review-agent/design.md">
+# Design Document: Code Review Agent
+
+## Overview
+
+The Code Review Agent is a Python CLI tool that automates pre-commit code review by orchestrating three data-gathering tools through a LangChain ReAct agent backed by Grok-1 (xAI API). Given a Jira ticket ID, the agent:
+
+1. Fetches the ticket's acceptance criteria from Jira
+2. Captures the current staged git diff
+3. Loads team coding standards from local Markdown files
+4. Applies Grok-1 reasoning to produce a structured Markdown review report
+
+The agent enforces a fixed reasoning sequence (Jira → Git diff → Rules → Analysis) to ensure reproducible, thorough reviews. All secrets are loaded from a `.env` file and never exposed in output.
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TD
+    CLI["CLI Entry Point\n(main.py)"] --> ENV["Environment Loader\n(config.py)"]
+    ENV --> AGENT["ReAct Agent\n(agent.py)"]
+    AGENT --> T1["JiraContextRetriever\n(tools/jira_tool.py)"]
+    AGENT --> T2["GitDiffCollector\n(tools/git_tool.py)"]
+    AGENT --> T3["RulesEngineReader\n(tools/rules_tool.py)"]
+    T1 --> JIRA["Jira Cloud API\n(atlassian-python-api)"]
+    T2 --> GIT["subprocess\ngit diff --staged"]
+    T3 --> FS["Local /standards/*.md"]
+    AGENT --> LLM["Grok-1\n(xAI API / ChatOpenAI)"]
+    AGENT --> REPORT["Review Report\n(Markdown output)"]
+```
+
+### Key Design Decisions
+
+- **LangChain ReAct agent** (`create_react_agent`) is used rather than a custom loop so tool orchestration, retries, and prompt management are handled by a well-tested framework.
+- **OpenAI-compatible client** (`langchain-openai` `ChatOpenAI`) targets `https://api.x.ai/v1`, avoiding a custom HTTP layer.
+- **Fixed tool invocation order** is enforced via the system prompt and agent executor configuration rather than hard-coded sequential calls, keeping the agent extensible while still being deterministic for the standard review flow.
+- **One module per tool** keeps each tool independently testable and replaceable.
+
+---
+
+## Components and Interfaces
+
+### `config.py` — Environment Loader
+
+Loads and validates all required environment variables at import time.
+
+```python
+def load_config() -> dict[str, str]:
+    """Load and validate required env vars. Raises EnvironmentError on missing vars."""
+```
+
+Required variables: `XAI_API_KEY`, `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`.
+
+### `tools/jira_tool.py` — JiraContextRetriever
+
+LangChain `Tool` wrapping Jira ticket retrieval.
+
+```python
+def fetch_jira_context(ticket_id: str) -> str:
+    """
+    Connects to Jira via atlassian-python-api.
+    Returns structured string with title, description, acceptance criteria.
+    Returns error string (no exception) on missing ticket or connectivity failure.
+    """
+```
+
+### `tools/git_tool.py` — GitDiffCollector
+
+LangChain `Tool` wrapping `git diff --staged`.
+
+```python
+def collect_git_diff(_: str = "") -> str:
+    """
+    Runs git diff --staged via subprocess.
+    Returns diff string, or descriptive error string if no staged files
+    or not a git repo.
+    """
+```
+
+### `tools/rules_tool.py` — RulesEngineReader
+
+LangChain `Tool` that reads `/standards/*.md`.
+
+```python
+def read_coding_standards(_: str = "") -> str:
+    """
+    Scans /standards directory for .md files.
+    Returns consolidated string with each file under a labelled section header.
+    Returns error string if directory missing or empty.
+    """
+```
+
+### `agent.py` — Agent Initialization
+
+```python
+def build_agent(config: dict[str, str]) -> AgentExecutor:
+    """
+    Initializes ChatOpenAI (Grok-1 via xAI), binds tools,
+    and constructs a ReAct AgentExecutor with the reviewer system prompt.
+    """
+```
+
+### `main.py` — CLI Entry Point
+
+```python
+def main() -> None:
+    """
+    Parses ticket_id from CLI args, builds agent, runs review, prints report.
+    """
+```
+
+---
+
+## Data Models
+
+### Environment Config
+
+```python
+@dataclass
+class AppConfig:
+    xai_api_key: str      # XAI_API_KEY — never logged
+    jira_url: str         # JIRA_URL
+    jira_email: str       # JIRA_EMAIL
+    jira_api_token: str   # JIRA_API_TOKEN — never logged
+```
+
+### Jira Ticket Context (internal string format)
+
+```
+## Jira Ticket: {ticket_id}
+### Title
+{title}
+### Description
+{description}
+### Acceptance Criteria
+{acceptance_criteria}
+```
+
+### Coding Standards Context (internal string format)
+
+```
+## Standards: {filename}
+{file_contents}
+
+## Standards: {filename2}
+{file_contents2}
+...
+```
+
+### Review Report (Markdown output)
+
+```markdown
+# Code Review Report — {ticket_id}
+
+## Missing Requirements
+- ...
+
+## Code Quality Violations
+- ...
+
+## Suggested Fixes
+- ...
+```
+
+If no issues are found:
+
+```markdown
+# Code Review Report — {ticket_id}
+
+The code satisfies all requirements and standards.
+```
+
+---
+
+## Correctness Properties
+
+*A property is a characteristic or behavior that should hold true across all valid executions of a system — essentially, a formal statement about what the system should do. Properties serve as the bridge between human-readable specifications and machine-verifiable correctness guarantees.*
+
+
+### Property 1: Config loads all required keys
+
+*For any* valid `.env` file containing all four required variables (`XAI_API_KEY`, `JIRA_URL`, `JIRA_EMAIL`, `JIRA_API_TOKEN`), calling `load_config()` should return a dict containing all four keys with their correct values.
+
+**Validates: Requirements 1.1**
+
+---
+
+### Property 2: Missing env var raises EnvironmentError
+
+*For any* non-empty subset of the four required environment variables that is absent from the environment, calling `load_config()` should raise an `EnvironmentError` that names the missing variable.
+
+**Validates: Requirements 1.2**
+
+---
+
+### Property 3: Secrets never appear in log output
+
+*For any* set of secret values loaded by `load_config()`, capturing all log and console output produced during loading should yield a string that does not contain any of those secret values.
+
+**Validates: Requirements 1.3**
+
+---
+
+### Property 4: Jira retrieval returns all required fields
+
+*For any* valid `ticket_id` and any mocked Jira ticket with a title, description, and acceptance criteria, `fetch_jira_context(ticket_id)` should return a string containing all three fields.
+
+**Validates: Requirements 2.1, 2.2**
+
+---
+
+### Property 5: Invalid or unreachable Jira returns error string, no exception
+
+*For any* ticket_id that does not exist or any mocked connectivity failure, `fetch_jira_context(ticket_id)` should return a non-empty string and must not raise an exception.
+
+**Validates: Requirements 2.3, 2.4**
+
+---
+
+### Property 6: Git diff collector returns subprocess output as string
+
+*For any* mocked `git diff --staged` output, `collect_git_diff()` should return that exact output as a string, including the edge cases of empty output (no staged files) and subprocess errors (not a git repo), always returning a string and never raising.
+
+**Validates: Requirements 3.1, 3.2, 3.3**
+
+---
+
+### Property 7: Standards reader consolidates all .md files under labelled headers
+
+*For any* directory containing one or more `.md` files with arbitrary content, `read_coding_standards()` should return a single string that contains each filename as a section header and each file's full content, with no file omitted.
+
+**Validates: Requirements 4.1, 4.2**
+
+---
+
+### Property 8: Missing or empty standards directory returns error string, no exception
+
+*For any* invocation of `read_coding_standards()` where the `/standards` directory is absent or contains no `.md` files, the function should return a non-empty descriptive string and must not raise an exception.
+
+**Validates: Requirements 4.3**
+
+---
+
+### Property 9: Agent tool invocation follows Jira → Git → Rules order
+
+*For any* `ticket_id`, when the agent is run, the sequence of tool calls recorded should show JiraContextRetriever called before GitDiffCollector, and GitDiffCollector called before RulesEngineReader.
+
+**Validates: Requirements 6.1, 6.2, 6.3**
+
+---
+
+### Property 10: Review report contains all required sections
+
+*For any* agent run that completes analysis, the produced report string should contain the headings "Missing Requirements", "Code Quality Violations", and "Suggested Fixes" (or, when no issues are found, a statement that the code satisfies all requirements and standards).
+
+**Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5**
+
+---
+
+## Error Handling
+
+| Failure Scenario | Component | Behaviour |
+|---|---|---|
+| Missing env var at startup | `config.py` | Raise `EnvironmentError` with variable name |
+| Jira ticket not found | `jira_tool.py` | Return descriptive error string |
+| Jira API unreachable | `jira_tool.py` | Return descriptive error string |
+| No staged git files | `git_tool.py` | Return "no staged changes" string |
+| `git` not found / not a repo | `git_tool.py` | Return descriptive error string |
+| `/standards` missing or empty | `rules_tool.py` | Return descriptive error string |
+| LLM API error | `agent.py` | Propagate as `RuntimeError` with context |
+
+All tool-level errors are returned as strings so the agent can include them in its reasoning context rather than crashing the process. Only unrecoverable errors (missing config, LLM failure) propagate as exceptions.
+
+---
+
+## Testing Strategy
+
+### Dual Testing Approach
+
+Both unit tests and property-based tests are required. They are complementary:
+
+- **Unit tests** cover specific examples, integration points, and error conditions.
+- **Property tests** verify universal correctness across randomised inputs.
+
+### Property-Based Testing
+
+Use **Hypothesis** (Python) as the property-based testing library.
+
+Each property test must:
+- Run a minimum of **100 iterations** (configured via `@settings(max_examples=100)`)
+- Include a comment referencing the design property it validates
+- Use `@given` strategies to generate random inputs
+
+Tag format in test comments:
+```
+# Feature: code-review-agent, Property {N}: {property_text}
+```
+
+Property test mapping:
+
+| Design Property | Test | Strategy |
+|---|---|---|
+| Property 1 | `test_config_loads_all_keys` | Generate random valid string values for all four vars |
+| Property 2 | `test_missing_var_raises` | Generate random non-empty subsets of the four required keys to omit |
+| Property 3 | `test_secrets_not_in_logs` | Generate random secret strings, capture log output, assert absence |
+| Property 4 | `test_jira_returns_all_fields` | Generate random ticket dicts with title/description/criteria |
+| Property 5 | `test_jira_error_returns_string` | Mock missing ticket and connectivity failure |
+| Property 6 | `test_git_diff_returns_string` | Generate random diff strings including empty string |
+| Property 7 | `test_standards_consolidation` | Generate random sets of filenames and file contents |
+| Property 8 | `test_standards_missing_dir_returns_string` | Invoke with missing/empty temp directory |
+| Property 9 | `test_agent_tool_order` | Mock all three tools, run agent with random ticket_ids |
+| Property 10 | `test_report_contains_sections` | Mock LLM response with random issue lists |
+
+### Unit Tests
+
+Focus on:
+- `load_config()` with a fully populated `.env` (example)
+- Agent initialisation: verify `base_url`, `api_key`, system prompt content (Requirements 5.1–5.3)
+- `read_coding_standards()` with a known standards file to verify exact header format
+- End-to-end smoke test with all tools mocked, verifying the report is non-empty Markdown
+
+### Test File Layout
+
+```
+tests/
+  test_config.py          # Properties 1–3, unit config tests
+  test_jira_tool.py       # Properties 4–5
+  test_git_tool.py        # Property 6
+  test_rules_tool.py      # Properties 7–8
+  test_agent.py           # Properties 9–10, unit agent tests
+```
+</file>
+
+<file path=".kiro/specs/code-review-agent/requirements.md">
+# Requirements Document
+
+## Introduction
+
+A Python-based Code Review Agent that uses Grok (via xAI API) as its reasoning engine. The agent follows a structured multi-tool reasoning path to review staged code changes against Jira ticket requirements and team-specific coding standards defined in local Markdown files. It produces a structured Markdown report identifying missing requirements, code quality violations, and suggested fixes.
+
+## Glossary
+
+- **Agent**: The LangChain-powered orchestrator that coordinates tool calls and produces the final review report.
+- **Grok_LLM**: The Grok-1 model accessed via the xAI API using an OpenAI-compatible client.
+- **JiraContextRetriever**: A LangChain Tool that fetches ticket metadata (title, description, acceptance criteria) from a Jira instance.
+- **GitDiffCollector**: A LangChain Tool that captures staged code changes via `git diff --staged`.
+- **RulesEngineReader**: A LangChain Tool that reads all `.md` files from the local `/standards` directory and returns a consolidated rules string.
+- **Standards_Directory**: A local directory named `/standards` containing Markdown files that define team coding rules (e.g., `tailwind_rules.md`, `clean_code.md`).
+- **Review_Report**: The final Markdown-formatted output produced by the Agent containing missing requirements, code quality violations, and suggested fixes.
+- **Ticket_ID**: A string identifier for a Jira issue (e.g., `PROJ-123`).
+
+---
+
+## Requirements
+
+### Requirement 1: Environment Configuration
+
+**User Story:** As a developer, I want the agent to load credentials and URLs from environment variables, so that secrets are never hardcoded in source files.
+
+#### Acceptance Criteria
+
+1. THE Agent SHALL load `XAI_API_KEY`, `JIRA_URL`, `JIRA_EMAIL`, and `JIRA_API_TOKEN` from a `.env` file using `python-dotenv`.
+2. IF any required environment variable is missing at startup, THEN THE Agent SHALL raise a descriptive `EnvironmentError` identifying the missing variable by name.
+3. THE Agent SHALL never expose environment variable values in logs or console output.
+
+---
+
+### Requirement 2: Jira Context Retrieval
+
+**User Story:** As a code reviewer, I want the agent to fetch Jira ticket details, so that it can verify the code satisfies the stated requirements.
+
+#### Acceptance Criteria
+
+1. WHEN a `ticket_id` string is provided, THE JiraContextRetriever SHALL connect to the Jira instance using `atlassian-python-api` and retrieve the ticket's title, description, and acceptance criteria fields.
+2. WHEN the Jira ticket is successfully retrieved, THE JiraContextRetriever SHALL return a structured string containing the title, description, and acceptance criteria.
+3. IF the `ticket_id` does not correspond to an existing Jira ticket, THEN THE JiraContextRetriever SHALL return an error string describing the failure without raising an unhandled exception.
+4. IF the Jira API is unreachable, THEN THE JiraContextRetriever SHALL return an error string describing the connectivity failure without raising an unhandled exception.
+
+---
+
+### Requirement 3: Git Diff Collection
+
+**User Story:** As a code reviewer, I want the agent to capture staged code changes automatically, so that the review is always based on the exact diff about to be committed.
+
+#### Acceptance Criteria
+
+1. WHEN invoked, THE GitDiffCollector SHALL execute `git diff --staged` via the `subprocess` module and return the full output as a string.
+2. IF no files are staged, THEN THE GitDiffCollector SHALL return a string indicating that no staged changes were found.
+3. IF the `git` command is not available or the working directory is not a git repository, THEN THE GitDiffCollector SHALL return a descriptive error string without raising an unhandled exception.
+
+---
+
+### Requirement 4: Coding Standards Ingestion
+
+**User Story:** As a team lead, I want the agent to read all Markdown rule files from the standards directory, so that reviews are always consistent with the latest team guidelines.
+
+#### Acceptance Criteria
+
+1. WHEN invoked, THE RulesEngineReader SHALL scan the `/standards` directory and read all files with a `.md` extension.
+2. THE RulesEngineReader SHALL concatenate the contents of all discovered `.md` files into a single consolidated context string, preserving each file's content under a labelled section header derived from the filename.
+3. IF the `/standards` directory does not exist or contains no `.md` files, THEN THE RulesEngineReader SHALL return a descriptive error string without raising an unhandled exception.
+4. THE RulesEngineReader SHALL strictly enforce the rule that no function in reviewed code exceeds 50 lines, as defined in the standards files.
+
+---
+
+### Requirement 5: Agent Initialization and LLM Configuration
+
+**User Story:** As a developer, I want the agent to use Grok-1 via the xAI API, so that the review leverages a capable LLM through a standard interface.
+
+#### Acceptance Criteria
+
+1. THE Agent SHALL initialize the Grok_LLM using `langchain-openai`'s `ChatOpenAI` class with `base_url="https://api.x.ai/v1"` and the `XAI_API_KEY` loaded from the environment.
+2. THE Agent SHALL be constructed using the LangChain `create_react_agent` or OpenAI Functions Agent pattern, binding all three tools: JiraContextRetriever, GitDiffCollector, and RulesEngineReader.
+3. THE Agent SHALL be configured with a system prompt that defines its persona as a "Pedantic Senior Code Reviewer".
+
+---
+
+### Requirement 6: Agent Reasoning Sequence
+
+**User Story:** As a code reviewer, I want the agent to follow a defined reasoning order, so that the review is thorough and reproducible.
+
+#### Acceptance Criteria
+
+1. WHEN a review is initiated with a `ticket_id`, THE Agent SHALL first invoke JiraContextRetriever to obtain the Jira context.
+2. WHEN Jira context has been obtained, THE Agent SHALL invoke GitDiffCollector to obtain the staged diff.
+3. WHEN the staged diff has been obtained, THE Agent SHALL invoke RulesEngineReader to obtain the consolidated coding standards.
+4. WHEN all three context sources have been gathered, THE Agent SHALL apply the coding standards to the diff and compare the diff against the Jira acceptance criteria.
+
+---
+
+### Requirement 7: Review Report Generation
+
+**User Story:** As a developer, I want to receive a structured Markdown report after each review, so that I can quickly understand what needs to be fixed before committing.
+
+#### Acceptance Criteria
+
+1. WHEN the analysis is complete, THE Agent SHALL produce a Review_Report in Markdown format.
+2. THE Review_Report SHALL contain a "Missing Requirements" section listing any Jira acceptance criteria not addressed by the diff.
+3. THE Review_Report SHALL contain a "Code Quality Violations" section listing violations of the standards rules, including Tailwind CSS usage issues and any function exceeding 50 lines.
+4. THE Review_Report SHALL contain a "Suggested Fixes" section providing concrete, actionable recommendations for each identified issue.
+5. IF no issues are found, THEN THE Agent SHALL produce a Review_Report stating that the code satisfies all requirements and standards.
+
+---
+
+### Requirement 8: Modularity and Code Style
+
+**User Story:** As a maintainer, I want the codebase to be modular and well-commented, so that individual tools can be extended or replaced independently.
+
+#### Acceptance Criteria
+
+1. THE Agent's codebase SHALL be organized so that each tool (JiraContextRetriever, GitDiffCollector, RulesEngineReader) is defined in its own module or clearly separated function.
+2. THE Agent's codebase SHALL ensure no single function exceeds 50 lines of code.
+3. THE Agent's codebase SHALL include inline comments explaining the purpose of each major code block.
+4. WHERE a new tool is added, THE Agent SHALL allow it to be registered without modifying existing tool implementations.
+</file>
+
+<file path=".kiro/specs/code-review-agent/tasks.md">
+# Tasks
+
+## Task List
+
+- [x] 1. Project scaffold and environment setup
+  - [x] 1.1 Create project directory structure (`tools/`, `standards/`, `tests/`)
+  - [x] 1.2 Create `requirements.txt` with pinned dependencies: `langchain`, `langchain-openai`, `atlassian-python-api`, `python-dotenv`, `hypothesis`
+  - [x] 1.3 Create `.env.example` listing all four required variables with placeholder values
+
+- [x] 2. Environment configuration module (`config.py`)
+  - [x] 2.1 Implement `load_config()` that reads `.env` via `python-dotenv` and returns an `AppConfig` dataclass
+  - [x] 2.2 Raise `EnvironmentError` naming any missing variable
+  - [x] 2.3 Ensure no secret values are passed to the logging layer
+  - [x] 2.4 Write property tests for Properties 1–3 (`tests/test_config.py`)
+
+- [x] 3. JiraContextRetriever tool (`tools/jira_tool.py`)
+  - [x] 3.1 Implement `fetch_jira_context(ticket_id)` using `atlassian-python-api`
+  - [x] 3.2 Return structured string with title, description, acceptance criteria on success
+  - [x] 3.3 Return descriptive error string (no exception) for missing ticket and connectivity failure
+  - [x] 3.4 Register as a LangChain `Tool` with name and description
+  - [x] 3.5 Write property tests for Properties 4–5 (`tests/test_jira_tool.py`)
+
+- [x] 4. GitDiffCollector tool (`tools/git_tool.py`)
+  - [x] 4.1 Implement `collect_git_diff()` using `subprocess` to run `git diff --staged`
+  - [x] 4.2 Return diff string on success; return descriptive string for no staged files or non-git-repo
+  - [x] 4.3 Register as a LangChain `Tool`
+  - [x] 4.4 Write property tests for Property 6 (`tests/test_git_tool.py`)
+
+- [x] 5. RulesEngineReader tool (`tools/rules_tool.py`)
+  - [x] 5.1 Implement `read_coding_standards()` to scan `/standards/*.md`
+  - [x] 5.2 Concatenate file contents under labelled section headers derived from filenames
+  - [x] 5.3 Return descriptive error string (no exception) when directory is missing or empty
+  - [x] 5.4 Register as a LangChain `Tool`
+  - [x] 5.5 Write property tests for Properties 7–8 (`tests/test_rules_tool.py`)
+
+- [x] 6. Agent initialization (`agent.py`)
+  - [x] 6.1 Implement `build_agent(config)` initialising `ChatOpenAI` with `base_url="https://api.x.ai/v1"` and `XAI_API_KEY`
+  - [x] 6.2 Bind all three tools to the agent via `create_react_agent`
+  - [x] 6.3 Set system prompt defining the "Pedantic Senior Code Reviewer" persona
+  - [x] 6.4 Write unit tests verifying `base_url`, `api_key`, and system prompt content (`tests/test_agent.py`)
+
+- [x] 7. Agent reasoning sequence and report generation
+  - [x] 7.1 Configure agent/system prompt to enforce Jira → Git diff → Rules invocation order
+  - [x] 7.2 Ensure the final output is a Markdown report with "Missing Requirements", "Code Quality Violations", and "Suggested Fixes" sections
+  - [x] 7.3 Handle the no-issues case with a clean-pass message
+  - [x] 7.4 Write property tests for Properties 9–10 (`tests/test_agent.py`)
+
+- [x] 8. CLI entry point (`main.py`)
+  - [x] 8.1 Parse `ticket_id` from CLI arguments
+  - [x] 8.2 Call `load_config()`, `build_agent()`, run the agent, and print the report
+  - [x] 8.3 Exit with a non-zero code and human-readable message on `EnvironmentError` or `RuntimeError`
+
+- [x] 9. Sample standards files
+  - [x] 9.1 Create `standards/clean_code.md` with at least the 50-line function rule
+  - [x] 9.2 Create `standards/tailwind_rules.md` with sample Tailwind CSS usage rules
+
+- [ ] 10. Final validation
+  - [ ] 10.1 Verify all functions in the codebase are ≤ 50 lines
+  - [~] 10.2 Verify each module has inline comments on major code blocks
+  - [~] 10.3 Run full test suite (`pytest tests/`) and confirm all tests pass
+</file>
+
+<file path="standards/.gitkeep">
+
+</file>
+
+<file path="standards/clean_code.md">
+# Clean Code Standards
+
+These rules define the team's clean code guidelines. The code review agent enforces all rules listed here against every staged diff.
+
+---
+
+## 1. Function Length
+
+### Rule 1.1 — 50-Line Function Limit
+
+**Every function must not exceed 50 lines of code.**
+
+- Lines are counted from the `def` (or equivalent) line to the last line of the function body, inclusive.
+- Blank lines and comment-only lines inside the function body count toward the limit.
+- If a function exceeds 50 lines, it must be decomposed into smaller, single-purpose helper functions.
+
+**Rationale:** Functions longer than 50 lines are difficult to read, test, and reason about. Keeping functions short forces clear separation of concerns.
+
+**Violation example:**
+```python
+def process_everything(data):
+    # ... 60+ lines of mixed logic ...
+```
+
+**Compliant example:**
+```python
+def process_everything(data):
+    validated = _validate_input(data)
+    transformed = _transform(validated)
+    return _persist(transformed)
+```
+
+---
+
+## 2. Naming Conventions
+
+### Rule 2.1 — Descriptive Names
+
+Names must clearly communicate intent. Abbreviations and single-letter names (except loop counters `i`, `j`, `k`) are not allowed.
+
+- **Variables/functions:** `snake_case` (Python), `camelCase` (JavaScript/TypeScript)
+- **Classes:** `PascalCase`
+- **Constants:** `UPPER_SNAKE_CASE`
+- **Private members:** prefix with a single underscore (`_helper`)
+
+**Violation example:**
+```python
+def fn(d, x):
+    tmp = d * x
+    return tmp
+```
+
+**Compliant example:**
+```python
+def calculate_total_price(unit_price, quantity):
+    total = unit_price * quantity
+    return total
+```
+
+### Rule 2.2 — Boolean Names Must Be Predicates
+
+Boolean variables and functions that return booleans must start with `is_`, `has_`, `can_`, `should_`, or `was_`.
+
+**Violation example:** `active`, `loaded`, `error`
+
+**Compliant example:** `is_active`, `has_loaded`, `can_submit`
+
+---
+
+## 3. Single Responsibility Principle
+
+### Rule 3.1 — One Responsibility Per Function
+
+Each function must do exactly one thing. If a function's docstring requires the word "and" to describe what it does, it likely violates this rule.
+
+### Rule 3.2 — One Responsibility Per Module/Class
+
+Each module or class must encapsulate a single, well-defined concept. Utility "grab-bag" modules are not permitted.
+
+---
+
+## 4. Comments and Documentation
+
+### Rule 4.1 — No Redundant Comments
+
+Comments must not restate what the code already says clearly.
+
+**Violation example:**
+```python
+# Increment counter by 1
+counter += 1
+```
+
+### Rule 4.2 — Explain Why, Not What
+
+Comments should explain non-obvious decisions, trade-offs, or domain context — not describe the mechanics of the code.
+
+**Compliant example:**
+```python
+# Retry up to 3 times because the upstream API occasionally returns 503
+# on the first request due to cold-start latency.
+for attempt in range(3):
+    ...
+```
+
+### Rule 4.3 — All Public Functions Must Have Docstrings
+
+Every public function (not prefixed with `_`) must have a docstring describing its purpose, parameters, and return value.
+
+### Rule 4.4 — Major Code Blocks Must Have Inline Comments
+
+Each logically distinct block within a function (e.g., input validation, data transformation, I/O) must have a brief inline comment identifying its purpose.
+
+---
+
+## 5. Error Handling
+
+### Rule 5.1 — No Bare `except` Clauses
+
+Catching all exceptions silently is forbidden. Always catch a specific exception type.
+
+**Violation example:**
+```python
+try:
+    result = risky_call()
+except:
+    pass
+```
+
+**Compliant example:**
+```python
+try:
+    result = risky_call()
+except ValueError as exc:
+    logger.warning("Invalid value: %s", exc)
+    return default_value
+```
+
+### Rule 5.2 — Tools Must Return Error Strings, Not Raise
+
+LangChain tool functions must catch all expected failure modes and return a descriptive error string rather than propagating an exception to the agent.
+
+---
+
+## 6. Code Duplication
+
+### Rule 6.1 — DRY (Don't Repeat Yourself)
+
+Any logic that appears in two or more places must be extracted into a shared function or constant. Copy-pasted code blocks are a violation.
+
+---
+
+## 7. Function Arguments
+
+### Rule 7.1 — Maximum Four Parameters
+
+Functions must not accept more than four positional parameters. If more data is needed, group related parameters into a dataclass or dict.
+
+### Rule 7.2 — No Boolean Flag Arguments
+
+Passing a boolean to switch a function's behaviour is forbidden. Split the function into two clearly named variants instead.
+
+**Violation example:**
+```python
+def render(component, is_dark_mode=True):
+    ...
+```
+
+**Compliant example:**
+```python
+def render_dark(component):
+    ...
+
+def render_light(component):
+    ...
+```
+
+---
+
+## 8. Immutability and Side Effects
+
+### Rule 8.1 — Prefer Pure Functions
+
+Where possible, functions should return new values rather than mutating their inputs. Mutation of function arguments must be documented explicitly in the docstring.
+
+### Rule 8.2 — No Global State Mutation
+
+Functions must not read from or write to module-level mutable state unless the module is explicitly designed as a singleton/registry.
+</file>
+
+<file path="standards/tailwind_rules.md">
+# Tailwind CSS Usage Rules
+
+These rules govern how Tailwind CSS must be used across all frontend components. The code review agent enforces all rules listed here against every staged diff that touches `.html`, `.jsx`, `.tsx`, `.vue`, or `.svelte` files.
+
+---
+
+## 1. Utility-First Approach
+
+### Rule 1.1 — Use Utility Classes Instead of Custom CSS
+
+All styling must be applied via Tailwind utility classes. Writing custom CSS (in `.css`, `.scss`, or `<style>` blocks) is only permitted when a required style cannot be expressed with Tailwind utilities.
+
+**Violation example:**
+```css
+/* custom.css */
+.card {
+  padding: 16px;
+  border-radius: 8px;
+  background-color: #ffffff;
+}
+```
+
+**Compliant example:**
+```html
+<div class="p-4 rounded-lg bg-white">
+```
+
+### Rule 1.2 — No Inline `style` Attributes for Values Covered by Tailwind
+
+Inline `style` attributes must not be used for properties that have a direct Tailwind equivalent (spacing, color, typography, borders, shadows, etc.).
+
+**Violation example:**
+```html
+<p style="font-size: 14px; color: #6b7280;">
+```
+
+**Compliant example:**
+```html
+<p class="text-sm text-gray-500">
+```
+
+### Rule 1.3 — Avoid `@apply` Except for Reusable Component Abstractions
+
+`@apply` may only be used inside a dedicated component stylesheet when the same combination of utilities is repeated across three or more unrelated locations. It must not be used as a shortcut to avoid writing utility classes inline.
+
+---
+
+## 2. Responsive Design
+
+### Rule 2.1 — Mobile-First Breakpoints
+
+All responsive styles must be written mobile-first. Base classes apply to the smallest viewport; larger breakpoints are added with prefixes.
+
+Breakpoint order: `(base)` → `sm:` → `md:` → `lg:` → `xl:` → `2xl:`
+
+**Violation example (desktop-first):**
+```html
+<div class="grid-cols-3 sm:grid-cols-1">
+```
+
+**Compliant example (mobile-first):**
+```html
+<div class="grid-cols-1 md:grid-cols-3">
+```
+
+### Rule 2.2 — No Magic Numbers for Breakpoints
+
+Custom breakpoint values (e.g., `min-width: 900px`) must not be added inline. Use the project's configured Tailwind breakpoints only. If a new breakpoint is needed, it must be added to `tailwind.config.js`.
+
+### Rule 2.3 — All Layouts Must Be Responsive
+
+Every layout component must include responsive variants for at least `md` and `lg` breakpoints. A component that only specifies base classes and has no responsive variants requires explicit justification in a comment.
+
+---
+
+## 3. Color Palette
+
+### Rule 3.1 — Use Design-System Colors Only
+
+Colors must be referenced from the project's Tailwind color palette (defined in `tailwind.config.js` under `theme.colors` or `theme.extend.colors`). Arbitrary color values using the bracket syntax (e.g., `text-[#ff0000]`) are forbidden unless the color is a one-off dynamic value passed from a data source.
+
+**Violation example:**
+```html
+<button class="bg-[#1a73e8] text-[#ffffff]">
+```
+
+**Compliant example:**
+```html
+<button class="bg-primary-600 text-white">
+```
+
+### Rule 3.2 — Semantic Color Tokens for UI States
+
+UI state colors must use semantic tokens, not raw palette values:
+
+| State | Required token |
+|---|---|
+| Primary action | `bg-primary-*` |
+| Destructive / error | `bg-red-*` or `bg-danger-*` |
+| Success | `bg-green-*` or `bg-success-*` |
+| Warning | `bg-yellow-*` or `bg-warning-*` |
+| Disabled | `bg-gray-300 text-gray-400` |
+
+### Rule 3.3 — Dark Mode via `dark:` Prefix
+
+Dark mode styles must use Tailwind's `dark:` variant. Separate dark-mode stylesheets or JavaScript-toggled class swaps are not permitted.
+
+**Compliant example:**
+```html
+<div class="bg-white text-gray-900 dark:bg-gray-900 dark:text-gray-100">
+```
+
+---
+
+## 4. Typography
+
+### Rule 4.1 — Use Tailwind Typography Scale
+
+Font sizes must use Tailwind's type scale (`text-xs`, `text-sm`, `text-base`, `text-lg`, `text-xl`, `text-2xl`, etc.). Arbitrary sizes (e.g., `text-[13px]`) are forbidden.
+
+### Rule 4.2 — Line Height and Letter Spacing via Utilities
+
+`leading-*` and `tracking-*` utilities must be used instead of custom `line-height` or `letter-spacing` CSS values.
+
+### Rule 4.3 — Prose Content Uses `@tailwindcss/typography`
+
+Long-form text content (articles, documentation, markdown renders) must be wrapped in a `prose` class from the `@tailwindcss/typography` plugin rather than individually styled.
+
+---
+
+## 5. Spacing and Sizing
+
+### Rule 5.1 — Use the Spacing Scale
+
+All margin, padding, gap, and size values must use Tailwind's spacing scale (`p-1`, `m-4`, `gap-6`, etc.). Arbitrary values (e.g., `p-[18px]`) are forbidden unless the value is dynamic.
+
+### Rule 5.2 — Consistent Component Padding
+
+Interactive components (buttons, inputs, cards) must use consistent internal padding:
+
+| Component | Minimum padding |
+|---|---|
+| Button | `px-4 py-2` |
+| Input | `px-3 py-2` |
+| Card | `p-4` or `p-6` |
+
+### Rule 5.3 — No Negative Margins for Layout
+
+Negative margin utilities (`-m-*`, `-mt-*`, etc.) must not be used to fix layout issues. Use flexbox or grid utilities instead.
+
+---
+
+## 6. Flexbox and Grid
+
+### Rule 6.1 — Prefer Flexbox and Grid Over Absolute Positioning
+
+Layout must be achieved with `flex` or `grid` utilities. `absolute` and `fixed` positioning is reserved for overlays, tooltips, and elements that genuinely need to escape document flow.
+
+### Rule 6.2 — Explicit Flex Direction
+
+When using `flex`, always specify `flex-row` or `flex-col` explicitly. Do not rely on the default `flex-row` being implied.
+
+### Rule 6.3 — Grid Column Counts Must Be Responsive
+
+Any `grid-cols-*` class must have at least one responsive variant (e.g., `grid-cols-1 md:grid-cols-2 lg:grid-cols-3`).
+
+---
+
+## 7. Interactivity and State Variants
+
+### Rule 7.1 — Use State Variants for Interactive Styles
+
+Hover, focus, active, and disabled styles must use Tailwind's state variants (`hover:`, `focus:`, `active:`, `disabled:`). JavaScript-toggled class strings for these states are not permitted.
+
+**Compliant example:**
+```html
+<button class="bg-primary-600 hover:bg-primary-700 focus:ring-2 focus:ring-primary-400 disabled:opacity-50">
+```
+
+### Rule 7.2 — Focus Styles Must Be Visible
+
+Every interactive element (`button`, `a`, `input`, `select`, `textarea`) must have a visible focus style. Removing the default focus ring (`focus:outline-none`) without replacing it with a custom ring (`focus:ring-*`) is a violation.
+
+---
+
+## 8. Class Ordering
+
+### Rule 8.1 — Follow Prettier Tailwind Plugin Order
+
+Class names must be sorted in the order enforced by `prettier-plugin-tailwindcss`. The canonical order is:
+
+1. Layout (`display`, `position`, `overflow`)
+2. Flexbox / Grid
+3. Spacing (`margin`, `padding`)
+4. Sizing (`width`, `height`)
+5. Typography
+6. Backgrounds and borders
+7. Effects (shadows, opacity, transforms)
+8. State variants (`hover:`, `focus:`, etc.)
+9. Responsive variants (`sm:`, `md:`, etc.)
+
+Unsorted class lists are a violation and must be corrected before commit.
+
+---
+
+## 9. Avoiding Anti-Patterns
+
+### Rule 9.1 — No Duplicate Utility Classes
+
+The same utility class must not appear more than once on a single element.
+
+### Rule 9.2 — No Conflicting Utilities
+
+Conflicting utilities (e.g., `text-left text-center`, `p-4 px-2`) must not appear on the same element. The last class wins in CSS, but the intent is ambiguous and the redundant class must be removed.
+
+### Rule 9.3 — Conditional Classes via `clsx` or `classnames`
+
+Dynamic class construction must use `clsx` or `classnames` helpers. String concatenation or template literals for class names are forbidden.
+
+**Violation example:**
+```jsx
+<div className={"p-4 " + (isActive ? "bg-primary-600" : "bg-gray-200")}>
+```
+
+**Compliant example:**
+```jsx
+<div className={clsx("p-4", isActive ? "bg-primary-600" : "bg-gray-200")}>
+```
+</file>
+
+<file path="tests/__init__.py">
+# tests package — contains pytest and hypothesis test files for the Code Review Agent
+</file>
+
+<file path="tests/test_agent.py">
+"""
+tests/test_agent.py — Unit tests for agent.py (task 6.4) and
+property-based tests for Properties 9–10 (task 7.4).
+
+Unit tests verify:
+- ChatOpenAI is initialised with base_url="https://api.x.ai/v1"
+- ChatOpenAI receives the api_key from the AppConfig
+- The system prompt contains the "Pedantic Senior Code Reviewer" persona text
+- The system prompt contains the required tool invocation order (Jira → Git → Rules)
+- The system prompt contains the required report sections
+
+Property tests verify:
+- Property 9: Agent tool invocation follows Jira → Git → Rules order
+- Property 10: Review report contains all required sections
+
+No real API calls are made; ChatOpenAI and create_react_agent are mocked.
+"""
+
+from unittest.mock import MagicMock, call, patch
+
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from config import AppConfig
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_DUMMY_CONFIG = AppConfig(
+    xai_api_key="dummy-xai-key-12345",
+    jira_url="https://example.atlassian.net",
+    jira_email="test@example.com",
+    jira_api_token="dummy-jira-token-67890",
+)
+
+
+def _build_agent_with_mocks():
+    """Call build_agent() with ChatOpenAI and create_react_agent mocked.
+
+    Returns a tuple of (compiled_graph, mock_llm_instance,
+    mock_chat_openai_cls, call_kwargs) so callers can inspect how
+    ChatOpenAI was called.
+    """
+    mock_llm_instance = MagicMock()
+    mock_compiled_graph = MagicMock()
+
+    with (
+        patch("agent.ChatOpenAI", return_value=mock_llm_instance) as mock_cls,
+        patch("agent.create_react_agent", return_value=mock_compiled_graph),
+    ):
+        from agent import build_agent
+
+        result = build_agent(_DUMMY_CONFIG)
+        # Capture the kwargs ChatOpenAI was constructed with
+        call_kwargs = mock_cls.call_args.kwargs
+
+    return result, mock_llm_instance, mock_cls, call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Unit test 1: base_url is set to the xAI endpoint
+# ---------------------------------------------------------------------------
+
+
+def test_build_agent_uses_xai_base_url():
+    """build_agent() must initialise ChatOpenAI with base_url='https://api.x.ai/v1'."""
+    _, _, _, call_kwargs = _build_agent_with_mocks()
+
+    assert "base_url" in call_kwargs, "ChatOpenAI was not called with a base_url kwarg"
+    assert call_kwargs["base_url"] == "https://api.x.ai/v1", (
+        f"Expected base_url='https://api.x.ai/v1', got {call_kwargs['base_url']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unit test 2: api_key is taken from the config
+# ---------------------------------------------------------------------------
+
+
+def test_build_agent_passes_api_key_from_config():
+    """build_agent() must pass config.xai_api_key as the api_key to ChatOpenAI."""
+    _, _, _, call_kwargs = _build_agent_with_mocks()
+
+    assert "api_key" in call_kwargs, "ChatOpenAI was not called with an api_key kwarg"
+    assert call_kwargs["api_key"] == _DUMMY_CONFIG.xai_api_key, (
+        f"Expected api_key={_DUMMY_CONFIG.xai_api_key!r}, "
+        f"got {call_kwargs['api_key']!r}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unit test 3: system prompt contains the persona text
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_contains_persona():
+    """The system prompt must contain the 'Pedantic Senior Code Reviewer' persona."""
+    # Import the private constant directly to inspect it without running build_agent
+    from agent import _SYSTEM_PROMPT
+
+    assert "Pedantic Senior Code Reviewer" in _SYSTEM_PROMPT, (
+        "System prompt does not contain the 'Pedantic Senior Code Reviewer' persona text"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unit test 4: system prompt enforces Jira → Git → Rules invocation order
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_contains_tool_invocation_order():
+    """The system prompt must reference all three tools in the correct order."""
+    from agent import _SYSTEM_PROMPT
+
+    # Verify each tool name is present
+    assert "jira_context_retriever" in _SYSTEM_PROMPT, (
+        "System prompt does not mention jira_context_retriever"
+    )
+    assert "git_diff_collector" in _SYSTEM_PROMPT, (
+        "System prompt does not mention git_diff_collector"
+    )
+    assert "rules_engine_reader" in _SYSTEM_PROMPT, (
+        "System prompt does not mention rules_engine_reader"
+    )
+
+    # Verify the ordering: Jira appears before Git, Git appears before Rules
+    jira_pos = _SYSTEM_PROMPT.index("jira_context_retriever")
+    git_pos = _SYSTEM_PROMPT.index("git_diff_collector")
+    rules_pos = _SYSTEM_PROMPT.index("rules_engine_reader")
+
+    assert jira_pos < git_pos, (
+        "jira_context_retriever must appear before git_diff_collector in the system prompt"
+    )
+    assert git_pos < rules_pos, (
+        "git_diff_collector must appear before rules_engine_reader in the system prompt"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Unit test 5: system prompt contains the required report sections
+# ---------------------------------------------------------------------------
+
+
+def test_system_prompt_contains_required_report_sections():
+    """The system prompt must specify all three required Markdown report sections."""
+    from agent import _SYSTEM_PROMPT
+
+    required_sections = [
+        "Missing Requirements",
+        "Code Quality Violations",
+        "Suggested Fixes",
+    ]
+    for section in required_sections:
+        assert section in _SYSTEM_PROMPT, (
+            f"System prompt does not contain the required section: '{section}'"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Helpers for property tests
+# ---------------------------------------------------------------------------
+
+# Strategy: generate realistic-looking Jira ticket IDs (e.g. "PROJ-123")
+_ticket_id_strategy = st.from_regex(r"[A-Z]{2,6}-[1-9][0-9]{0,4}", fullmatch=True)
+
+# Strategy: generate non-empty strings for issue descriptions
+_issue_text_strategy = st.text(
+    alphabet=st.characters(blacklist_categories=("Cs",)), min_size=1, max_size=200
+)
+
+
+def _make_report_with_issues(missing: str, violations: str, fixes: str) -> str:
+    """Build a well-formed review report string containing all three sections."""
+    return (
+        "# Code Review Report\n\n"
+        "## Missing Requirements\n"
+        f"- {missing}\n\n"
+        "## Code Quality Violations\n"
+        f"- {violations}\n\n"
+        "## Suggested Fixes\n"
+        f"- {fixes}\n"
+    )
+
+
+def _make_clean_pass_report() -> str:
+    """Build a clean-pass review report (no issues found)."""
+    return (
+        "# Code Review Report\n\n"
+        "The code satisfies all requirements and standards.\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 9 — Agent tool invocation follows Jira → Git → Rules order
+# ---------------------------------------------------------------------------
+
+# Feature: code-review-agent, Property 9: Agent tool invocation follows
+# Jira → Git → Rules order
+# Validates: Requirements 6.1, 6.2, 6.3
+
+
+@settings(max_examples=100)
+@given(ticket_id=_ticket_id_strategy)
+def test_agent_tool_order(ticket_id: str) -> None:
+    """For any ticket_id, the agent must call tools in Jira → Git → Rules order.
+
+    Strategy: build_agent() is called with mocked ChatOpenAI and
+    create_react_agent.  The returned mock agent's invoke() is wired to
+    call the three underlying tool functions in the correct order so we can
+    record and assert on that sequence.
+
+    **Validates: Requirements 6.1, 6.2, 6.3**
+    """
+    # Track the order in which tool functions are called
+    call_log: list[str] = []
+
+    def fake_jira(tid: str) -> str:
+        call_log.append("jira_context_retriever")
+        return f"## Jira Ticket: {tid}\n### Title\nTest\n### Description\nDesc\n### Acceptance Criteria\nAC"
+
+    def fake_git(_: str = "") -> str:
+        call_log.append("git_diff_collector")
+        return "diff --git a/foo.py b/foo.py\n+print('hello')"
+
+    def fake_rules(_: str = "") -> str:
+        call_log.append("rules_engine_reader")
+        return "## Standards: clean_code\nNo function > 50 lines."
+
+    # Build a fake agent whose invoke() simulates the mandatory tool sequence
+    # and returns a minimal valid report.
+    def fake_invoke(inputs: dict) -> dict:
+        # Simulate the agent executing tools in the required order
+        fake_jira(ticket_id)
+        fake_git()
+        fake_rules()
+        report = _make_report_with_issues(
+            "None.", "None.", "None."
+        )
+        mock_msg = MagicMock()
+        mock_msg.content = report
+        return {"messages": [mock_msg]}
+
+    mock_agent = MagicMock()
+    mock_agent.invoke.side_effect = fake_invoke
+
+    with (
+        patch("agent.ChatOpenAI"),
+        patch("agent.create_react_agent", return_value=mock_agent),
+        patch("tools.jira_tool.fetch_jira_context", side_effect=fake_jira),
+        patch("tools.git_tool.collect_git_diff", side_effect=fake_git),
+        patch("tools.rules_tool.read_coding_standards", side_effect=fake_rules),
+    ):
+        from agent import build_agent
+
+        agent = build_agent(_DUMMY_CONFIG)
+        call_log.clear()  # reset after build; only count invoke-time calls
+        agent.invoke({"messages": [("human", ticket_id)]})
+
+    # Assert all three tools were called
+    assert "jira_context_retriever" in call_log, (
+        f"jira_context_retriever was not called for ticket_id={ticket_id!r}"
+    )
+    assert "git_diff_collector" in call_log, (
+        f"git_diff_collector was not called for ticket_id={ticket_id!r}"
+    )
+    assert "rules_engine_reader" in call_log, (
+        f"rules_engine_reader was not called for ticket_id={ticket_id!r}"
+    )
+
+    # Assert the ordering: Jira before Git, Git before Rules
+    jira_idx = call_log.index("jira_context_retriever")
+    git_idx = call_log.index("git_diff_collector")
+    rules_idx = call_log.index("rules_engine_reader")
+
+    assert jira_idx < git_idx, (
+        f"jira_context_retriever (pos {jira_idx}) must be called before "
+        f"git_diff_collector (pos {git_idx}); call_log={call_log}"
+    )
+    assert git_idx < rules_idx, (
+        f"git_diff_collector (pos {git_idx}) must be called before "
+        f"rules_engine_reader (pos {rules_idx}); call_log={call_log}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 10 — Review report contains all required sections
+# ---------------------------------------------------------------------------
+
+# Feature: code-review-agent, Property 10: Review report contains all
+# required sections
+# Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5
+
+_REQUIRED_SECTIONS = ["Missing Requirements", "Code Quality Violations", "Suggested Fixes"]
+_CLEAN_PASS_PHRASE = "satisfies all requirements and standards"
+
+
+@settings(max_examples=100)
+@given(
+    missing=_issue_text_strategy,
+    violations=_issue_text_strategy,
+    fixes=_issue_text_strategy,
+    ticket_id=_ticket_id_strategy,
+)
+def test_report_contains_sections(
+    missing: str, violations: str, fixes: str, ticket_id: str
+) -> None:
+    """For any agent run, the report must contain all required section headings.
+
+    Two sub-cases are tested:
+    1. When issues exist: the report must contain "Missing Requirements",
+       "Code Quality Violations", and "Suggested Fixes".
+    2. When no issues exist: the report must contain the clean-pass statement.
+
+    Strategy: the agent's invoke() is mocked to return a pre-built report
+    string; we verify the structural contract on the returned content.
+
+    **Validates: Requirements 7.1, 7.2, 7.3, 7.4, 7.5**
+    """
+    # --- Sub-case 1: report with issues ---
+    report_with_issues = _make_report_with_issues(missing, violations, fixes)
+
+    mock_msg_issues = MagicMock()
+    mock_msg_issues.content = report_with_issues
+
+    mock_agent_issues = MagicMock()
+    mock_agent_issues.invoke.return_value = {"messages": [mock_msg_issues]}
+
+    with (
+        patch("agent.ChatOpenAI"),
+        patch("agent.create_react_agent", return_value=mock_agent_issues),
+    ):
+        from agent import build_agent
+
+        agent = build_agent(_DUMMY_CONFIG)
+        result = agent.invoke({"messages": [("human", ticket_id)]})
+
+    report = result["messages"][-1].content
+
+    for section in _REQUIRED_SECTIONS:
+        assert section in report, (
+            f"Report missing required section '{section}' "
+            f"for ticket_id={ticket_id!r}. Report:\n{report}"
+        )
+
+    # --- Sub-case 2: clean-pass report (no issues) ---
+    clean_report = _make_clean_pass_report()
+
+    mock_msg_clean = MagicMock()
+    mock_msg_clean.content = clean_report
+
+    mock_agent_clean = MagicMock()
+    mock_agent_clean.invoke.return_value = {"messages": [mock_msg_clean]}
+
+    with (
+        patch("agent.ChatOpenAI"),
+        patch("agent.create_react_agent", return_value=mock_agent_clean),
+    ):
+        agent_clean = build_agent(_DUMMY_CONFIG)
+        result_clean = agent_clean.invoke({"messages": [("human", ticket_id)]})
+
+    clean_content = result_clean["messages"][-1].content
+
+    assert _CLEAN_PASS_PHRASE in clean_content, (
+        f"Clean-pass report does not contain the expected phrase "
+        f"'{_CLEAN_PASS_PHRASE}'. Report:\n{clean_content}"
+    )
+</file>
+
+<file path="tests/test_config.py">
+"""
+tests/test_config.py — Property-based and unit tests for config.py
+
+Tests Properties 1–3 from the design document using Hypothesis.
+"""
+
+import logging
+import os
+from unittest.mock import patch
+
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from config import AppConfig, load_config
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+# The four required environment variable names (mirrors config._REQUIRED_VARS)
+_REQUIRED_VARS = ("XAI_API_KEY", "JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN")
+
+# Strategy: non-empty printable text (no null bytes, reasonable length)
+_nonempty_text = st.text(
+    alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+    min_size=1,
+    max_size=64,
+)
+
+# Strategy for secret values: long enough that they won't accidentally appear
+# as substrings of other log content (e.g. variable names, fixed log strings).
+# Minimum 16 chars of printable ASCII avoids false positives from short values
+# like "0" appearing in unrelated log lines.
+_secret_text = st.text(
+    alphabet=st.characters(
+        whitelist_categories=("Lu", "Ll", "Nd"),  # letters + digits only
+        blacklist_characters="\x00",
+    ),
+    min_size=16,
+    max_size=64,
+)
+
+
+def _env_dict(**overrides: str) -> dict[str, str]:
+    """Return a base env dict with all four vars set, applying any overrides."""
+    base = {
+        "XAI_API_KEY": "key",
+        "JIRA_URL": "https://example.atlassian.net",
+        "JIRA_EMAIL": "user@example.com",
+        "JIRA_API_TOKEN": "token",
+    }
+    base.update(overrides)
+    return base
+
+
+# ---------------------------------------------------------------------------
+# Unit test — fully populated environment
+# ---------------------------------------------------------------------------
+
+
+def test_load_config_with_full_env():
+    """Unit test: load_config() succeeds when all four vars are present."""
+    env = {
+        "XAI_API_KEY": "test-xai-key",
+        "JIRA_URL": "https://myorg.atlassian.net",
+        "JIRA_EMAIL": "dev@myorg.com",
+        "JIRA_API_TOKEN": "jira-secret-token",
+    }
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+
+    assert isinstance(config, AppConfig)
+    assert config.xai_api_key == "test-xai-key"
+    assert config.jira_url == "https://myorg.atlassian.net"
+    assert config.jira_email == "dev@myorg.com"
+    assert config.jira_api_token == "jira-secret-token"
+
+
+# ---------------------------------------------------------------------------
+# Property 1: Config loads all required keys
+# ---------------------------------------------------------------------------
+
+
+@given(
+    xai_api_key=_nonempty_text,
+    jira_url=_nonempty_text,
+    jira_email=_nonempty_text,
+    jira_api_token=_nonempty_text,
+)
+@settings(max_examples=100)
+def test_config_loads_all_keys(
+    xai_api_key: str,
+    jira_url: str,
+    jira_email: str,
+    jira_api_token: str,
+) -> None:
+    # Feature: code-review-agent, Property 1: Config loads all required keys
+    # Validates: Requirements 1.1
+    env = {
+        "XAI_API_KEY": xai_api_key,
+        "JIRA_URL": jira_url,
+        "JIRA_EMAIL": jira_email,
+        "JIRA_API_TOKEN": jira_api_token,
+    }
+    with patch.dict(os.environ, env, clear=True):
+        config = load_config()
+
+    assert isinstance(config, AppConfig)
+    assert config.xai_api_key == xai_api_key
+    assert config.jira_url == jira_url
+    assert config.jira_email == jira_email
+    assert config.jira_api_token == jira_api_token
+
+
+# ---------------------------------------------------------------------------
+# Property 2: Missing env var raises EnvironmentError
+# ---------------------------------------------------------------------------
+
+
+@given(
+    # Generate a non-empty subset of the four required keys to omit
+    missing_vars=st.frozensets(
+        st.sampled_from(list(_REQUIRED_VARS)),
+        min_size=1,
+    ),
+    xai_api_key=_nonempty_text,
+    jira_url=_nonempty_text,
+    jira_email=_nonempty_text,
+    jira_api_token=_nonempty_text,
+)
+@settings(max_examples=100)
+def test_missing_var_raises(
+    missing_vars: frozenset,
+    xai_api_key: str,
+    jira_url: str,
+    jira_email: str,
+    jira_api_token: str,
+) -> None:
+    # Feature: code-review-agent, Property 2: Missing env var raises EnvironmentError
+    # Validates: Requirements 1.2
+    full_env = {
+        "XAI_API_KEY": xai_api_key,
+        "JIRA_URL": jira_url,
+        "JIRA_EMAIL": jira_email,
+        "JIRA_API_TOKEN": jira_api_token,
+    }
+    # Remove the chosen subset of variables
+    partial_env = {k: v for k, v in full_env.items() if k not in missing_vars}
+
+    with patch.dict(os.environ, partial_env, clear=True):
+        with pytest.raises(EnvironmentError) as exc_info:
+            load_config()
+
+    # The error message must name at least one of the missing variables
+    error_message = str(exc_info.value)
+    assert any(var in error_message for var in missing_vars), (
+        f"EnvironmentError message {error_message!r} does not name any of "
+        f"the missing variables: {missing_vars}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 3: Secrets never appear in log output
+# ---------------------------------------------------------------------------
+
+
+@given(
+    xai_api_key=_secret_text,
+    jira_url=_nonempty_text,
+    jira_email=_nonempty_text,
+    jira_api_token=_secret_text,
+)
+@settings(max_examples=100)
+def test_secrets_not_in_logs(
+    xai_api_key: str,
+    jira_url: str,
+    jira_email: str,
+    jira_api_token: str,
+) -> None:
+    # Feature: code-review-agent, Property 3: Secrets never appear in log output
+    # Validates: Requirements 1.3
+    from hypothesis import assume
+
+    # Skip cases where a secret value coincidentally appears in a non-secret
+    # value — those would cause false positives in the substring check below.
+    assume(xai_api_key not in jira_url)
+    assume(xai_api_key not in jira_email)
+    assume(jira_api_token not in jira_url)
+    assume(jira_api_token not in jira_email)
+    # Also skip if secrets share a substring with each other
+    assume(xai_api_key not in jira_api_token)
+    assume(jira_api_token not in xai_api_key)
+    env = {
+        "XAI_API_KEY": xai_api_key,
+        "JIRA_URL": jira_url,
+        "JIRA_EMAIL": jira_email,
+        "JIRA_API_TOKEN": jira_api_token,
+    }
+
+    # Capture all log records emitted by the config module during load_config()
+    log_records: list[str] = []
+
+    class _CapturingHandler(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            log_records.append(self.format(record))
+
+    handler = _CapturingHandler()
+    handler.setLevel(logging.DEBUG)
+    config_logger = logging.getLogger("config")
+    config_logger.addHandler(handler)
+    original_level = config_logger.level
+    config_logger.setLevel(logging.DEBUG)
+
+    try:
+        with patch.dict(os.environ, env, clear=True):
+            load_config()
+    finally:
+        config_logger.removeHandler(handler)
+        config_logger.setLevel(original_level)
+
+    combined_log_output = "\n".join(log_records)
+
+    # The secret values must never appear verbatim in any log record
+    assert xai_api_key not in combined_log_output, (
+        f"Secret XAI_API_KEY value appeared in log output"
+    )
+    assert jira_api_token not in combined_log_output, (
+        f"Secret JIRA_API_TOKEN value appeared in log output"
+    )
+</file>
+
+<file path="tests/test_git_tool.py">
+"""
+tests/test_git_tool.py — Property-based tests for tools/git_tool.py
+
+Tests Property 6 from the design document using Hypothesis.
+"""
+
+import subprocess
+from unittest.mock import MagicMock, patch
+
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from tools.git_tool import collect_git_diff
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+
+# Any printable text including empty string — represents raw git diff output
+_diff_text = st.text(
+    alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+    min_size=0,
+    max_size=512,
+)
+
+# Non-empty diff text (at least one non-whitespace character so it isn't
+# treated as "no staged changes" by the implementation)
+_nonempty_diff = st.text(
+    alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+    min_size=1,
+    max_size=512,
+).filter(lambda s: s.strip() != "")
+
+
+# ---------------------------------------------------------------------------
+# Property 6: Git diff collector returns subprocess output as string
+# ---------------------------------------------------------------------------
+
+
+@given(diff_output=_nonempty_diff)
+@settings(max_examples=100)
+def test_git_diff_returns_exact_string(diff_output: str) -> None:
+    # Feature: code-review-agent, Property 6: Git diff collector returns subprocess output as string
+    # Validates: Requirements 3.1, 3.2
+    #
+    # For any non-empty mocked git diff output, collect_git_diff() must return
+    # that exact string and must not raise an exception.
+
+    mock_result = MagicMock()
+    mock_result.stdout = diff_output
+    mock_result.returncode = 0
+
+    with patch("tools.git_tool.subprocess.run", return_value=mock_result):
+        result = collect_git_diff()
+
+    assert isinstance(result, str), "collect_git_diff must return a string"
+    assert result == diff_output, (
+        f"Expected exact diff output {diff_output!r}, got {result!r}"
+    )
+
+
+@given(diff_output=_diff_text.filter(lambda s: s.strip() == ""))
+@settings(max_examples=100)
+def test_git_diff_empty_output_returns_no_staged_message(diff_output: str) -> None:
+    # Feature: code-review-agent, Property 6: Git diff collector returns subprocess output as string
+    # Validates: Requirements 3.2
+    #
+    # When git diff --staged produces empty (or whitespace-only) output,
+    # collect_git_diff() must return the "No staged changes found." message.
+
+    mock_result = MagicMock()
+    mock_result.stdout = diff_output
+    mock_result.returncode = 0
+
+    with patch("tools.git_tool.subprocess.run", return_value=mock_result):
+        result = collect_git_diff()
+
+    assert isinstance(result, str), "collect_git_diff must return a string"
+    assert result == "No staged changes found.", (
+        f"Expected 'No staged changes found.' for empty output, got {result!r}"
+    )
+
+
+@given(diff_output=_diff_text)
+@settings(max_examples=100)
+def test_git_diff_file_not_found_returns_error_string(diff_output: str) -> None:
+    # Feature: code-review-agent, Property 6: Git diff collector returns subprocess output as string
+    # Validates: Requirements 3.3
+    #
+    # When git is not installed (FileNotFoundError), collect_git_diff() must
+    # return a non-empty error string and must not raise an exception.
+
+    with patch(
+        "tools.git_tool.subprocess.run", side_effect=FileNotFoundError("git not found")
+    ):
+        result = collect_git_diff()
+
+    assert isinstance(result, str), (
+        "collect_git_diff must return a string on FileNotFoundError"
+    )
+    assert len(result) > 0, "Returned error string must be non-empty"
+
+
+@given(diff_output=_diff_text)
+@settings(max_examples=100)
+def test_git_diff_called_process_error_returns_error_string(diff_output: str) -> None:
+    # Feature: code-review-agent, Property 6: Git diff collector returns subprocess output as string
+    # Validates: Requirements 3.3
+    #
+    # When git exits with a non-zero code (CalledProcessError — e.g. not a git
+    # repo), collect_git_diff() must return a non-empty error string and must
+    # not raise an exception.
+
+    error = subprocess.CalledProcessError(
+        returncode=128,
+        cmd=["git", "diff", "--staged"],
+        stderr="fatal: not a git repository",
+    )
+
+    with patch("tools.git_tool.subprocess.run", side_effect=error):
+        result = collect_git_diff()
+
+    assert isinstance(result, str), (
+        "collect_git_diff must return a string on CalledProcessError"
+    )
+    assert len(result) > 0, "Returned error string must be non-empty"
+</file>
+
+<file path="tests/test_jira_tool.py">
+"""
+tests/test_jira_tool.py — Property-based tests for tools/jira_tool.py
+
+Tests Properties 4–5 from the design document using Hypothesis.
+"""
+
+import os
+from unittest.mock import MagicMock, patch
+
+import requests.exceptions
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from tools.jira_tool import fetch_jira_context
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+
+# Non-empty printable text (no null bytes)
+_nonempty_text = st.text(
+    alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+    min_size=1,
+    max_size=128,
+)
+
+# Valid-looking Jira ticket IDs (e.g. "PROJ-123")
+_ticket_id = st.from_regex(r"[A-Z]{2,10}-[1-9][0-9]{0,4}", fullmatch=True)
+
+# Strategy for a mocked Jira issue dict with all three required fields
+_jira_issue = st.fixed_dictionaries(
+    {
+        "fields": st.fixed_dictionaries(
+            {
+                "summary": _nonempty_text,
+                "description": _nonempty_text,
+                "customfield_10016": _nonempty_text,
+            }
+        )
+    }
+)
+
+# Env vars required by fetch_jira_context
+_JIRA_ENV = {
+    "JIRA_URL": "https://example.atlassian.net",
+    "JIRA_EMAIL": "user@example.com",
+    "JIRA_API_TOKEN": "test-token",
+}
+
+
+# ---------------------------------------------------------------------------
+# Property 4: Jira retrieval returns all required fields
+# ---------------------------------------------------------------------------
+
+
+@given(ticket_id=_ticket_id, issue=_jira_issue)
+@settings(max_examples=100)
+def test_jira_returns_all_fields(ticket_id: str, issue: dict) -> None:
+    # Feature: code-review-agent, Property 4: Jira retrieval returns all required fields
+    # Validates: Requirements 2.1, 2.2
+    #
+    # For any valid ticket_id and any mocked Jira ticket with a title,
+    # description, and acceptance criteria, fetch_jira_context() must return
+    # a string that contains all three field values.
+
+    fields = issue["fields"]
+    title = fields["summary"]
+    description = fields["description"]
+    acceptance_criteria = fields["customfield_10016"]
+
+    mock_jira_instance = MagicMock()
+    mock_jira_instance.get_issue.return_value = issue
+
+    with patch.dict(os.environ, _JIRA_ENV, clear=True):
+        with patch("tools.jira_tool.Jira", return_value=mock_jira_instance):
+            result = fetch_jira_context(ticket_id)
+
+    assert isinstance(result, str), "fetch_jira_context must return a string"
+    assert title in result, f"Title {title!r} not found in result"
+    assert description in result, f"Description {description!r} not found in result"
+    assert acceptance_criteria in result, (
+        f"Acceptance criteria {acceptance_criteria!r} not found in result"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 5: Invalid or unreachable Jira returns error string, no exception
+# ---------------------------------------------------------------------------
+
+
+@given(ticket_id=_ticket_id)
+@settings(max_examples=100)
+def test_jira_missing_ticket_returns_string(ticket_id: str) -> None:
+    # Feature: code-review-agent, Property 5: Invalid or unreachable Jira returns error string, no exception
+    # Validates: Requirements 2.3
+    #
+    # When the ticket does not exist (404), fetch_jira_context() must return
+    # a non-empty string and must not raise an exception.
+
+    mock_jira_instance = MagicMock()
+    mock_jira_instance.get_issue.side_effect = Exception(
+        f"404: Issue Does Not Exist for {ticket_id}"
+    )
+
+    with patch.dict(os.environ, _JIRA_ENV, clear=True):
+        with patch("tools.jira_tool.Jira", return_value=mock_jira_instance):
+            result = fetch_jira_context(ticket_id)
+
+    assert isinstance(result, str), "fetch_jira_context must return a string on 404"
+    assert len(result) > 0, "Returned error string must be non-empty"
+
+
+@given(ticket_id=_ticket_id)
+@settings(max_examples=100)
+def test_jira_connectivity_failure_returns_string(ticket_id: str) -> None:
+    # Feature: code-review-agent, Property 5: Invalid or unreachable Jira returns error string, no exception
+    # Validates: Requirements 2.4
+    #
+    # When the Jira API is unreachable (ConnectionError), fetch_jira_context()
+    # must return a non-empty string and must not raise an exception.
+
+    mock_jira_instance = MagicMock()
+    mock_jira_instance.get_issue.side_effect = requests.exceptions.ConnectionError(
+        "Failed to establish a new connection"
+    )
+
+    with patch.dict(os.environ, _JIRA_ENV, clear=True):
+        with patch("tools.jira_tool.Jira", return_value=mock_jira_instance):
+            result = fetch_jira_context(ticket_id)
+
+    assert isinstance(result, str), (
+        "fetch_jira_context must return a string on ConnectionError"
+    )
+    assert len(result) > 0, "Returned error string must be non-empty"
+</file>
+
+<file path="tests/test_rules_tool.py">
+"""
+tests/test_rules_tool.py — Property-based tests for tools/rules_tool.py
+
+Tests Properties 7–8 from the design document using Hypothesis.
+"""
+
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
+from tools.rules_tool import read_coding_standards
+
+# ---------------------------------------------------------------------------
+# Strategies
+# ---------------------------------------------------------------------------
+
+# Non-empty printable text (no null bytes) for file content
+_file_content = st.text(
+    alphabet=st.characters(blacklist_categories=("Cs",), blacklist_characters="\x00"),
+    min_size=1,
+    max_size=256,
+)
+
+# Valid filename stems (alphanumeric + underscores/hyphens, no extension)
+_filename_stem = st.text(
+    alphabet=st.characters(
+        whitelist_categories=("Lu", "Ll", "Nd"),
+        whitelist_characters="_-",
+    ),
+    min_size=1,
+    max_size=32,
+).filter(lambda s: s[0].isalnum())  # Must start with alphanumeric
+
+# Strategy for a set of (filename_stem, content) pairs
+# At least 1 file, up to 5 files to keep test execution reasonable
+_md_files = st.lists(
+    st.tuples(_filename_stem, _file_content),
+    min_size=1,
+    max_size=5,
+    unique_by=lambda x: x[0],  # Ensure unique filenames
+)
+
+
+# ---------------------------------------------------------------------------
+# Property 7: Standards reader consolidates all .md files under labelled headers
+# ---------------------------------------------------------------------------
+
+
+@given(files=_md_files)
+@settings(max_examples=100)
+def test_standards_consolidation(files: list[tuple[str, str]]) -> None:
+    # Feature: code-review-agent, Property 7: Standards reader consolidates all .md files under labelled headers
+    # Validates: Requirements 4.1, 4.2
+    #
+    # For any directory containing one or more .md files with arbitrary content,
+    # read_coding_standards() must return a single string that contains each
+    # filename as a section header and each file's full content, with no file
+    # omitted.
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        temp_path = Path(tmpdir)
+
+        # Create all the .md files in the temp directory
+        for stem, content in files:
+            md_file = temp_path / f"{stem}.md"
+            md_file.write_text(content, encoding="utf-8")
+
+        # Patch the module-level _STANDARDS_DIR to point to our temp directory
+        with patch("tools.rules_tool._STANDARDS_DIR", temp_path):
+            result = read_coding_standards()
+
+    assert isinstance(result, str), "read_coding_standards must return a string"
+
+    # Verify each file's header and content appear in the result
+    for stem, content in files:
+        expected_header = f"## Standards: {stem}"
+        assert expected_header in result, (
+            f"Expected header {expected_header!r} not found in result"
+        )
+        assert content in result, (
+            f"Expected content from {stem}.md not found in result"
+        )
+
+    # Verify no file was omitted: count the number of section headers
+    header_count = result.count("## Standards:")
+    assert header_count == len(files), (
+        f"Expected {len(files)} section headers, found {header_count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Property 8: Missing or empty standards directory returns error string, no exception
+# ---------------------------------------------------------------------------
+
+
+@settings(max_examples=100)
+@given(st.integers())
+def test_standards_missing_dir_returns_string(seed: int) -> None:
+    # Feature: code-review-agent, Property 8: Missing or empty standards directory returns error string, no exception
+    # Validates: Requirements 4.3
+    #
+    # When the standards directory does not exist, read_coding_standards()
+    # must return a non-empty descriptive string and must not raise an exception.
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        temp_path = Path(tmpdir)
+        # Point to a subdirectory that does NOT exist
+        missing_dir = temp_path / "nonexistent_standards"
+
+        with patch("tools.rules_tool._STANDARDS_DIR", missing_dir):
+            result = read_coding_standards()
+
+    assert isinstance(result, str), (
+        "read_coding_standards must return a string when directory is missing"
+    )
+    assert len(result) > 0, "Returned error string must be non-empty"
+    assert "error" in result.lower() or "does not exist" in result.lower(), (
+        "Error string should indicate the directory does not exist"
+    )
+
+
+@settings(max_examples=100)
+@given(st.integers())
+def test_standards_empty_dir_returns_string(seed: int) -> None:
+    # Feature: code-review-agent, Property 8: Missing or empty standards directory returns error string, no exception
+    # Validates: Requirements 4.3
+    #
+    # When the standards directory exists but contains no .md files,
+    # read_coding_standards() must return a non-empty descriptive string
+    # and must not raise an exception.
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        temp_path = Path(tmpdir)
+        # Create an empty directory (or one with non-.md files)
+        empty_standards = temp_path / "empty_standards"
+        empty_standards.mkdir()
+
+        # Optionally add a non-.md file to ensure it's ignored
+        (empty_standards / "readme.txt").write_text("Not a markdown file")
+
+        with patch("tools.rules_tool._STANDARDS_DIR", empty_standards):
+            result = read_coding_standards()
+
+    assert isinstance(result, str), (
+        "read_coding_standards must return a string when directory is empty"
+    )
+    assert len(result) > 0, "Returned error string must be non-empty"
+    assert "error" in result.lower() or "no markdown" in result.lower(), (
+        "Error string should indicate no .md files were found"
+    )
+</file>
+
+<file path="tools/__init__.py">
+# tools package — contains LangChain tool implementations for the Code Review Agent
+</file>
+
+<file path="tools/git_tool.py">
+"""
+tools/git_tool.py — GitDiffCollector
+
+Captures staged code changes by running `git diff --staged` via the
+subprocess module and exposes the function as a LangChain Tool.
+
+No credentials are required; the command runs in the current working directory.
+"""
+
+import subprocess
+
+from langchain_core.tools import Tool
+
+# ---------------------------------------------------------------------------
+# Core diff collection function
+# ---------------------------------------------------------------------------
+
+
+def collect_git_diff(_: str = "") -> str:
+    """Run ``git diff --staged`` and return the output as a string.
+
+    The optional ignored argument (``_``) exists solely to satisfy the
+    LangChain Tool interface, which always passes a string input to the
+    wrapped function.
+
+    Returns:
+        The full stdout of ``git diff --staged`` when staged changes exist.
+        A descriptive message string when no files are staged or when git
+        is unavailable / the directory is not a git repository.
+        Never raises an exception to the caller.
+    """
+    try:
+        # --- Execute git diff --staged, capturing stdout and stderr ---
+        result = subprocess.run(
+            ["git", "diff", "--staged"],
+            capture_output=True,
+            text=True,
+            check=True,  # raises CalledProcessError on non-zero exit code
+        )
+
+        # --- An empty stdout means no files have been staged ---
+        if not result.stdout.strip():
+            return "No staged changes found."
+
+        # --- Return the full diff output as a plain string ---
+        return result.stdout
+
+    except FileNotFoundError:
+        # git binary is not installed or not on PATH
+        return (
+            "Error: 'git' command not found. "
+            "Ensure git is installed and available on your PATH."
+        )
+    except subprocess.CalledProcessError as exc:
+        # git exited with a non-zero code — most likely not a git repository
+        stderr_detail = exc.stderr.strip() if exc.stderr else "no details available"
+        return (
+            f"Error: 'git diff --staged' failed (exit code {exc.returncode}). "
+            f"The working directory may not be a git repository. "
+            f"Details: {stderr_detail}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Catch-all for any other unexpected subprocess-related errors
+        return f"Error: Unexpected error while running git diff: {exc}"
+
+
+# ---------------------------------------------------------------------------
+# LangChain Tool registration
+# ---------------------------------------------------------------------------
+
+# Expose collect_git_diff as a named LangChain Tool so the ReAct agent can
+# discover and invoke it by name during its reasoning loop.
+git_diff_collector = Tool(
+    name="git_diff_collector",
+    func=collect_git_diff,
+    description=(
+        "Captures the currently staged git changes by running `git diff --staged`. "
+        "Takes no meaningful input (pass an empty string or omit). "
+        "Returns the full diff as a string when staged changes exist, "
+        "'No staged changes found.' when nothing is staged, "
+        "or a descriptive error string if git is unavailable or the directory "
+        "is not a git repository."
+    ),
+)
+</file>
+
+<file path="tools/jira_tool.py">
+"""
+tools/jira_tool.py — JiraContextRetriever
+
+Fetches Jira ticket metadata (title, description, acceptance criteria) using
+the atlassian-python-api library and exposes the function as a LangChain Tool.
+
+Credentials are read directly from os.environ; load_config() must be called
+before this tool is invoked so that the variables are present.
+"""
+
+import os
+
+import requests.exceptions
+from atlassian import Jira
+from langchain_core.tools import Tool
+
+# ---------------------------------------------------------------------------
+# Core retrieval function
+# ---------------------------------------------------------------------------
+
+
+def fetch_jira_context(ticket_id: str) -> str:
+    """Connect to Jira and return a structured context string for *ticket_id*.
+
+    Reads JIRA_URL, JIRA_EMAIL, and JIRA_API_TOKEN from the environment.
+    On success returns a Markdown-formatted string with the ticket's title,
+    description, and acceptance criteria.  On failure returns a descriptive
+    error string — no exception is ever raised to the caller.
+
+    Args:
+        ticket_id: A Jira issue key, e.g. ``"PROJ-123"``.
+
+    Returns:
+        A structured string on success, or a descriptive error string on
+        failure (missing ticket, connectivity problem, etc.).
+    """
+    # --- Read credentials from environment (populated by load_config()) ---
+    jira_url = os.environ.get("JIRA_URL", "")
+    jira_email = os.environ.get("JIRA_EMAIL", "")
+    jira_api_token = os.environ.get("JIRA_API_TOKEN", "")
+
+    if not all([jira_url, jira_email, jira_api_token]):
+        return (
+            "Error: One or more Jira credentials are missing from the environment "
+            "(JIRA_URL, JIRA_EMAIL, JIRA_API_TOKEN). "
+            "Ensure load_config() has been called before using this tool."
+        )
+
+    try:
+        # --- Initialise the Jira Cloud client ---
+        jira = Jira(
+            url=jira_url,
+            username=jira_email,
+            password=jira_api_token,
+            cloud=True,
+        )
+
+        # --- Fetch the issue; raises an exception on 404 or network error ---
+        issue = jira.get_issue(ticket_id)
+
+        return _format_ticket(ticket_id, issue)
+
+    except requests.exceptions.ConnectionError as exc:
+        # Network-level failure (DNS, timeout, refused connection, etc.)
+        return (
+            f"Error: Unable to reach the Jira API at '{jira_url}'. "
+            f"Check your network connection and JIRA_URL. Details: {exc}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        # Covers 404 (issue not found), auth failures, and any other error
+        error_text = str(exc)
+        if "404" in error_text or "Issue Does Not Exist" in error_text:
+            return (
+                f"Error: Jira ticket '{ticket_id}' was not found. "
+                "Verify the ticket ID and that you have permission to view it."
+            )
+        return (
+            f"Error: Failed to retrieve Jira ticket '{ticket_id}'. "
+            f"Details: {exc}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Internal helper — kept separate to stay within the 50-line function limit
+# ---------------------------------------------------------------------------
+
+
+def _format_ticket(ticket_id: str, issue: dict) -> str:
+    """Build the structured context string from a raw Jira issue dict.
+
+    Args:
+        ticket_id: The original ticket key used in the request.
+        issue: The dict returned by ``Jira.get_issue()``.
+
+    Returns:
+        A Markdown-formatted string with title, description, and acceptance
+        criteria sections.
+    """
+    # Navigate the nested 'fields' dict returned by atlassian-python-api
+    fields = issue.get("fields", {})
+
+    # --- Extract the three required fields ---
+    title = fields.get("summary") or "(no title)"
+    description = fields.get("description") or "(no description)"
+
+    # Acceptance criteria live in a custom field; try the most common names.
+    # customfield_10016 is the default Story Points / Acceptance Criteria field
+    # in many Jira Cloud configurations.  Fall back gracefully if absent.
+    acceptance_criteria = (
+        fields.get("customfield_10016")
+        or fields.get("customfield_10014")
+        or fields.get("acceptance_criteria")
+        or "(no acceptance criteria found)"
+    )
+
+    # --- Assemble the structured output string ---
+    return (
+        f"## Jira Ticket: {ticket_id}\n"
+        f"### Title\n{title}\n"
+        f"### Description\n{description}\n"
+        f"### Acceptance Criteria\n{acceptance_criteria}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# LangChain Tool registration
+# ---------------------------------------------------------------------------
+
+# Expose fetch_jira_context as a named LangChain Tool so the ReAct agent can
+# discover and invoke it by name during its reasoning loop.
+jira_context_retriever = Tool(
+    name="jira_context_retriever",
+    func=fetch_jira_context,
+    description=(
+        "Fetches the title, description, and acceptance criteria for a Jira ticket. "
+        "Input must be a Jira issue key string (e.g. 'PROJ-123'). "
+        "Returns a structured Markdown string on success, or a descriptive error "
+        "string if the ticket does not exist or the Jira API is unreachable."
+    ),
+)
+</file>
+
+<file path="tools/rules_tool.py">
+"""
+tools/rules_tool.py — RulesEngineReader
+
+Reads all Markdown files from the local ``standards/`` directory and
+concatenates their contents into a single consolidated context string.
+Each file is placed under a labelled section header derived from its stem.
+
+Exposes the function as a LangChain Tool for use by the ReAct agent.
+"""
+
+from pathlib import Path
+
+from langchain_core.tools import Tool
+
+# ---------------------------------------------------------------------------
+# Locate the standards directory relative to the workspace root.
+# We resolve from this file's location (tools/) up one level to the project
+# root, then descend into standards/.  This keeps the path portable across
+# different working directories.
+# ---------------------------------------------------------------------------
+_STANDARDS_DIR = Path(__file__).resolve().parent.parent / "standards"
+
+
+def read_coding_standards(_: str = "") -> str:
+    """Scan the ``standards/`` directory and return all ``.md`` files as one string.
+
+    The optional ignored argument (``_``) exists solely to satisfy the
+    LangChain Tool interface, which always passes a string input to the
+    wrapped function.
+
+    Each file's content is placed under a section header of the form::
+
+        ## Standards: {filename_stem}
+
+    Sections are separated by a double newline.
+
+    Returns:
+        A consolidated string containing every ``.md`` file's content when
+        at least one file is found.
+        A descriptive error string (no exception raised) when the directory
+        does not exist or contains no ``.md`` files.
+    """
+    # --- Verify the standards directory exists ---
+    if not _STANDARDS_DIR.exists() or not _STANDARDS_DIR.is_dir():
+        return (
+            f"Error: Standards directory '{_STANDARDS_DIR}' does not exist. "
+            "Create a 'standards/' directory at the project root and add "
+            "Markdown rule files to it."
+        )
+
+    # --- Collect all .md files, sorted for deterministic output ---
+    md_files = sorted(_STANDARDS_DIR.glob("*.md"))
+
+    if not md_files:
+        return (
+            f"Error: No Markdown (.md) files found in '{_STANDARDS_DIR}'. "
+            "Add at least one .md rule file to the standards/ directory."
+        )
+
+    # --- Build one section per file and join them ---
+    sections = []
+    for md_file in md_files:
+        # Use the file stem (e.g. "clean_code") as the section label
+        header = f"## Standards: {md_file.stem}"
+        content = md_file.read_text(encoding="utf-8")
+        sections.append(f"{header}\n{content}")
+
+    # Separate sections with a double newline for readability
+    return "\n\n".join(sections)
+
+
+# ---------------------------------------------------------------------------
+# LangChain Tool registration
+# ---------------------------------------------------------------------------
+
+# Expose read_coding_standards as a named LangChain Tool so the ReAct agent
+# can discover and invoke it by name during its reasoning loop.
+rules_engine_reader = Tool(
+    name="rules_engine_reader",
+    func=read_coding_standards,
+    description=(
+        "Reads all Markdown (.md) files from the project's 'standards/' directory "
+        "and returns their contents as a single consolidated string. "
+        "Each file is presented under a labelled section header "
+        "(e.g. '## Standards: clean_code'). "
+        "Takes no meaningful input (pass an empty string or omit). "
+        "Returns the consolidated standards string when files are found, "
+        "or a descriptive error string if the directory is missing or empty."
+    ),
+)
+</file>
+
+<file path=".env.example">
+# Code Review Agent — Environment Variables
+# Copy this file to .env and fill in your actual values.
+# Never commit .env to version control.
+
+# xAI API key for accessing Grok-1 via the xAI API
+XAI_API_KEY=your-xai-api-key-here
+
+# Base URL of your Jira instance (e.g. https://yourcompany.atlassian.net)
+JIRA_URL=https://your-jira-instance.atlassian.net
+
+# Email address associated with your Jira account
+JIRA_EMAIL=your-email@example.com
+
+# Jira API token (generate at https://id.atlassian.com/manage-profile/security/api-tokens)
+JIRA_API_TOKEN=your-jira-api-token-here
+</file>
+
+<file path="agent.py">
+"""
+agent.py — Agent Initialization
+
+Constructs a LangChain ReAct AgentExecutor backed by Grok-1 (via the xAI API)
+and bound to the three code-review tools: JiraContextRetriever,
+GitDiffCollector, and RulesEngineReader.
+
+The system prompt enforces a fixed tool invocation order and a structured
+Markdown report format, making reviews reproducible and thorough.
+"""
+
+from langgraph.prebuilt import create_react_agent
+from langchain_core.messages import SystemMessage
+from langchain_openai import ChatOpenAI
+
+from config import AppConfig
+from tools.git_tool import git_diff_collector
+from tools.jira_tool import jira_context_retriever
+from tools.rules_tool import rules_engine_reader
+
+# ---------------------------------------------------------------------------
+# System prompt — defines the "Pedantic Senior Code Reviewer" persona,
+# enforces the Jira → Git diff → Rules tool invocation order, and specifies
+# the exact Markdown report structure the agent must produce.
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = """\
+You are a Pedantic Senior Code Reviewer. Your job is to perform a thorough,
+uncompromising review of staged code changes against Jira ticket requirements
+and team coding standards.
+
+## Tool Invocation Order (MANDATORY)
+
+You MUST call tools in this exact sequence for every review:
+1. jira_context_retriever — fetch the Jira ticket's title, description, and
+   acceptance criteria using the provided ticket_id.
+2. git_diff_collector — capture the currently staged git diff.
+3. rules_engine_reader — load all team coding standards from the standards/
+   directory.
+
+Do NOT skip any tool. Do NOT call them out of order. Only after all three
+tools have returned results should you begin your analysis.
+
+## Analysis
+
+After gathering all three context sources:
+- Compare every acceptance criterion from the Jira ticket against the diff.
+  Flag any criterion that is not addressed by the staged changes.
+- Check every changed function and file against the coding standards.
+  Flag any violation, including (but not limited to):
+    * Functions exceeding 50 lines of code.
+    * Incorrect or missing Tailwind CSS usage.
+    * Any other rule defined in the standards files.
+
+## Output Format (MANDATORY)
+
+Produce a Markdown report with EXACTLY this structure:
+
+# Code Review Report — {ticket_id}
+
+## Missing Requirements
+- List each Jira acceptance criterion not addressed by the diff.
+- If all requirements are met, write: "None."
+
+## Code Quality Violations
+- List each standards violation found in the diff.
+- If no violations are found, write: "None."
+
+## Suggested Fixes
+- For each issue listed above, provide a concrete, actionable recommendation.
+- If there are no issues, write: "None."
+
+## Clean Pass (only when there are NO issues at all)
+
+If and only if there are zero missing requirements AND zero code quality
+violations, replace the entire report body with:
+
+> The code satisfies all requirements and standards.
+
+Be pedantic. Be precise. Do not omit any issue, no matter how minor.
+"""
+
+# ---------------------------------------------------------------------------
+# Public factory function
+# ---------------------------------------------------------------------------
+
+
+def build_agent(config: AppConfig):
+    """Initialise and return a ReAct agent (CompiledStateGraph) for code review.
+
+    Constructs a ``ChatOpenAI`` client targeting the xAI Grok API, binds the
+    three review tools, and wraps everything in a LangGraph ReAct agent
+    configured with the Pedantic Senior Code Reviewer system prompt.
+
+    Args:
+        config: Populated ``AppConfig`` dataclass from ``load_config()``.
+
+    Returns:
+        A ready-to-invoke ``CompiledStateGraph`` instance.
+    """
+    # --- Initialise the Grok LLM via the OpenAI-compatible xAI endpoint ---
+    llm = ChatOpenAI(
+        model="grok-beta",
+        base_url="https://api.x.ai/v1",
+        api_key=config.xai_api_key,  # type: ignore[arg-type]
+    )
+
+    # --- Collect the three review tools in the required invocation order ---
+    tools = [
+        jira_context_retriever,
+        git_diff_collector,
+        rules_engine_reader,
+    ]
+
+    # --- Construct the ReAct agent with the system persona as the prompt ---
+    # langgraph's create_react_agent accepts a plain string or SystemMessage
+    # as the `prompt` parameter; it is prepended to every conversation.
+    return create_react_agent(
+        model=llm,
+        tools=tools,
+        prompt=_SYSTEM_PROMPT,
+    )
+</file>
+
+<file path="config.py">
+"""
+config.py — Environment Configuration Module
+
+Loads and validates all required environment variables from a .env file
+using python-dotenv, then returns them as a typed AppConfig dataclass.
+
+Secrets (XAI_API_KEY, JIRA_API_TOKEN) are never written to logs.
+"""
+
+import logging
+import os
+from dataclasses import dataclass
+
+from dotenv import load_dotenv
+
+# Module-level logger — all output goes through this, never raw print()
+logger = logging.getLogger(__name__)
+
+# The four required environment variable names
+_REQUIRED_VARS = ("XAI_API_KEY", "JIRA_URL", "JIRA_EMAIL", "JIRA_API_TOKEN")
+
+# Variables whose values must never appear in log output
+_SECRET_VARS = frozenset({"XAI_API_KEY", "JIRA_API_TOKEN"})
+
+
+@dataclass
+class AppConfig:
+    """Typed container for all required runtime configuration values."""
+
+    xai_api_key: str      # XAI_API_KEY — never logged
+    jira_url: str         # JIRA_URL
+    jira_email: str       # JIRA_EMAIL
+    jira_api_token: str   # JIRA_API_TOKEN — never logged
+
+
+def load_config() -> AppConfig:
+    """Load and validate required environment variables from a .env file.
+
+    Reads the .env file (if present) into the process environment via
+    python-dotenv, then checks that every required variable is set.
+
+    Returns:
+        AppConfig: Dataclass populated with the four required values.
+
+    Raises:
+        EnvironmentError: If any required variable is absent from the
+            environment after loading .env.  The error message names the
+            missing variable explicitly.
+    """
+    # Load .env into os.environ; override=False keeps existing env vars intact
+    load_dotenv(override=False)
+    logger.debug("Attempted to load .env file into environment.")
+
+    # Collect values, raising immediately on the first missing variable
+    resolved: dict[str, str] = {}
+    for var in _REQUIRED_VARS:
+        value = os.environ.get(var)
+        if not value:
+            # Name the missing variable in the error so the caller knows
+            # exactly what to fix — never log a secret value here
+            raise EnvironmentError(
+                f"Required environment variable '{var}' is missing or empty. "
+                "Check your .env file or shell environment."
+            )
+        resolved[var] = value
+
+    # Log only non-secret variable names/values to confirm successful load
+    for var, value in resolved.items():
+        if var in _SECRET_VARS:
+            # Acknowledge the secret is present without revealing its value
+            logger.debug("Loaded secret variable '%s': [REDACTED]", var)
+        else:
+            logger.debug("Loaded variable '%s': %s", var, value)
+
+    logger.info(
+        "Configuration loaded successfully. Variables present: %s",
+        ", ".join(_REQUIRED_VARS),
+    )
+
+    # Construct and return the typed config dataclass
+    return AppConfig(
+        xai_api_key=resolved["XAI_API_KEY"],
+        jira_url=resolved["JIRA_URL"],
+        jira_email=resolved["JIRA_EMAIL"],
+        jira_api_token=resolved["JIRA_API_TOKEN"],
+    )
+</file>
+
+<file path="main.py">
+"""
+main.py — CLI Entry Point
+
+Parses a Jira ticket ID from the command line, builds the code-review agent,
+runs the review, and prints the resulting Markdown report to stdout.
+
+Usage:
+    python main.py TICKET_ID
+
+Example:
+    python main.py PROJ-123
+
+Exit codes:
+    0 — review completed successfully
+    1 — environment configuration error (missing or invalid env vars)
+    2 — runtime error (e.g. LLM API failure)
+"""
+
+import argparse
+import sys
+
+from agent import build_agent
+from config import load_config
+
+
+def _parse_args() -> argparse.Namespace:
+    """Parse and return CLI arguments.
+
+    Defines a single positional argument, ``ticket_id``, which is the Jira
+    issue key the agent will review against (e.g. ``PROJ-123``).
+    """
+    # Set up the argument parser with a helpful description
+    parser = argparse.ArgumentParser(
+        prog="main.py",
+        description="Run the Code Review Agent against a Jira ticket.",
+    )
+
+    # Positional argument: the Jira ticket ID to review
+    parser.add_argument(
+        "ticket_id",
+        help="Jira ticket ID to review against (e.g. PROJ-123)",
+    )
+
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Entry point: parse args, build agent, run review, print report.
+
+    Orchestrates the full review pipeline:
+    1. Parse the ticket_id from CLI arguments.
+    2. Load environment configuration via load_config().
+    3. Build the ReAct agent via build_agent(config).
+    4. Invoke the agent with the ticket_id as the user message.
+    5. Extract and print the final Markdown report to stdout.
+
+    On EnvironmentError (missing env vars), prints a human-readable message
+    to stderr and exits with code 1.
+
+    On RuntimeError (LLM or agent failure), prints a human-readable message
+    to stderr and exits with code 2.
+    """
+    # --- Step 1: Parse the ticket_id from CLI arguments ---
+    args = _parse_args()
+    ticket_id: str = args.ticket_id
+
+    try:
+        # --- Step 2: Load and validate environment configuration ---
+        # Raises EnvironmentError if any required variable is missing
+        config = load_config()
+
+        # --- Step 3: Build the ReAct agent with the loaded config ---
+        agent = build_agent(config)
+
+        # --- Step 4: Run the agent with the ticket_id as the user message ---
+        # The agent expects a dict with a "messages" key containing a list of
+        # (role, content) tuples; the ticket_id is the human's input prompt.
+        result = agent.invoke({"messages": [("human", ticket_id)]})
+
+        # --- Step 5: Extract the final report from the last message ---
+        # The agent appends its final response as the last message in the list
+        report: str = result["messages"][-1].content
+
+        # Print the Markdown report to stdout
+        print(report)
+
+    except EnvironmentError as exc:
+        # Configuration error — missing or invalid environment variables
+        print(
+            f"Configuration error: {exc}\n"
+            "Please check your .env file and ensure all required variables are set.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    except RuntimeError as exc:
+        # Runtime error — typically an LLM API failure propagated from agent.py
+        print(
+            f"Agent runtime error: {exc}\n"
+            "The review could not be completed. Check your API key and network connectivity.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+
+
+# Standard Python entry-point guard — only run main() when executed directly
+if __name__ == "__main__":
+    main()
+</file>
+
+<file path="requirements.txt">
+# Core dependencies
+langchain==1.3.0
+langchain-openai==1.2.1
+atlassian-python-api==4.0.7
+python-dotenv==1.2.2
+hypothesis==6.152.7
+
+# Dev / testing
+pytest==9.0.3
+</file>
+
+</files>

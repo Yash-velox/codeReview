@@ -1,0 +1,9 @@
+# Core dependencies
+langchain==1.3.0
+langchain-openai==1.2.1
+atlassian-python-api==4.0.7
+python-dotenv==1.2.2
+hypothesis==6.152.7
+
+# Dev / testing
+pytest==9.0.3
