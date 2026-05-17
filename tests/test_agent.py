@@ -3,8 +3,8 @@ tests/test_agent.py — Unit tests for agent.py (task 6.4) and
 property-based tests for Properties 9–10 (task 7.4).
 
 Unit tests verify:
-- ChatOpenAI is initialised with base_url="https://api.x.ai/v1"
-- ChatOpenAI receives the api_key from the AppConfig
+- ChatOpenAI is initialised with Groq's OpenAI-compatible base URL
+- ChatOpenAI receives api_key/model from ``AppConfig``
 - The system prompt contains the "Pedantic Senior Code Reviewer" persona text
 - The system prompt contains the required tool invocation order (Jira → Git → Rules)
 - The system prompt contains the required report sections
@@ -22,14 +22,16 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from config import AppConfig
+from config import DEFAULT_GROQ_API_BASE, DEFAULT_GROQ_MODEL, AppConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 _DUMMY_CONFIG = AppConfig(
-    xai_api_key="dummy-xai-key-12345",
+    groq_api_key="dummy-groq-key-12345",
+    groq_model=DEFAULT_GROQ_MODEL,
+    groq_api_base=DEFAULT_GROQ_API_BASE,
     jira_url="https://example.atlassian.net",
     jira_email="test@example.com",
     jira_api_token="dummy-jira-token-67890",
@@ -64,13 +66,12 @@ def _build_agent_with_mocks():
 # ---------------------------------------------------------------------------
 
 
-def test_build_agent_uses_xai_base_url():
-    """build_agent() must initialise ChatOpenAI with base_url='https://api.x.ai/v1'."""
+def test_build_agent_uses_groq_openai_base_url():
+    """build_agent() must point ChatOpenAI at Groq's OpenAI-compatible host."""
     _, _, _, call_kwargs = _build_agent_with_mocks()
 
-    assert "base_url" in call_kwargs, "ChatOpenAI was not called with a base_url kwarg"
-    assert call_kwargs["base_url"] == "https://api.x.ai/v1", (
-        f"Expected base_url='https://api.x.ai/v1', got {call_kwargs['base_url']!r}"
+    assert call_kwargs["base_url"] == DEFAULT_GROQ_API_BASE, (
+        f"Expected base_url={DEFAULT_GROQ_API_BASE!r}, got {call_kwargs['base_url']!r}"
     )
 
 
@@ -80,14 +81,20 @@ def test_build_agent_uses_xai_base_url():
 
 
 def test_build_agent_passes_api_key_from_config():
-    """build_agent() must pass config.xai_api_key as the api_key to ChatOpenAI."""
+    """build_agent() must pass ``config.groq_api_key`` to ChatOpenAI."""
     _, _, _, call_kwargs = _build_agent_with_mocks()
 
     assert "api_key" in call_kwargs, "ChatOpenAI was not called with an api_key kwarg"
-    assert call_kwargs["api_key"] == _DUMMY_CONFIG.xai_api_key, (
-        f"Expected api_key={_DUMMY_CONFIG.xai_api_key!r}, "
+    assert call_kwargs["api_key"] == _DUMMY_CONFIG.groq_api_key, (
+        f"Expected api_key={_DUMMY_CONFIG.groq_api_key!r}, "
         f"got {call_kwargs['api_key']!r}"
     )
+
+
+def test_build_agent_passes_model_from_config():
+    """ChatOpenAI must receive ``model`` from ``AppConfig``."""
+    _, _, _, call_kwargs = _build_agent_with_mocks()
+    assert call_kwargs.get("model") == _DUMMY_CONFIG.groq_model
 
 
 # ---------------------------------------------------------------------------

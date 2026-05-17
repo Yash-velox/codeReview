@@ -12,7 +12,7 @@ import os
 
 import requests.exceptions
 from atlassian import Jira
-from langchain_core.tools import Tool
+from langchain_core.tools import tool
 
 # ---------------------------------------------------------------------------
 # Core retrieval function
@@ -123,18 +123,18 @@ def _format_ticket(ticket_id: str, issue: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
-# LangChain Tool registration
+# LangChain Tool registration (structured schema — required for Groq tool calling)
 # ---------------------------------------------------------------------------
 
-# Expose fetch_jira_context as a named LangChain Tool so the ReAct agent can
-# discover and invoke it by name during its reasoning loop.
-jira_context_retriever = Tool(
-    name="jira_context_retriever",
-    func=fetch_jira_context,
-    description=(
-        "Fetches the title, description, and acceptance criteria for a Jira ticket. "
-        "Input must be a Jira issue key string (e.g. 'PROJ-123'). "
-        "Returns a structured Markdown string on success, or a descriptive error "
-        "string if the ticket does not exist or the Jira API is unreachable."
-    ),
-)
+
+@tool
+def jira_context_retriever(ticket_id: str) -> str:
+    """Fetch Jira title, description, and acceptance criteria for an issue.
+
+    Args:
+        ticket_id: Jira issue key, e.g. ``PROJ-123`` or ``KAN-30``.
+
+    Returns:
+        Markdown context on success, or an error message string on failure.
+    """
+    return fetch_jira_context(ticket_id)

@@ -10,7 +10,7 @@ Exposes the function as a LangChain Tool for use by the ReAct agent.
 
 from pathlib import Path
 
-from langchain_core.tools import Tool
+from langchain_core.tools import tool
 
 # ---------------------------------------------------------------------------
 # Locate the standards directory relative to the workspace root.
@@ -70,21 +70,11 @@ def read_coding_standards(_: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# LangChain Tool registration
+# LangChain Tool registration (structured schema — required for Groq tool calling)
 # ---------------------------------------------------------------------------
 
-# Expose read_coding_standards as a named LangChain Tool so the ReAct agent
-# can discover and invoke it by name during its reasoning loop.
-rules_engine_reader = Tool(
-    name="rules_engine_reader",
-    func=read_coding_standards,
-    description=(
-        "Reads all Markdown (.md) files from the project's 'standards/' directory "
-        "and returns their contents as a single consolidated string. "
-        "Each file is presented under a labelled section header "
-        "(e.g. '## Standards: clean_code'). "
-        "Takes no meaningful input (pass an empty string or omit). "
-        "Returns the consolidated standards string when files are found, "
-        "or a descriptive error string if the directory is missing or empty."
-    ),
-)
+
+@tool
+def rules_engine_reader() -> str:
+    """Load all Markdown files from ``standards/`` into one labelled string."""
+    return read_coding_standards("")

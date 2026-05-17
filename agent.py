@@ -1,16 +1,15 @@
 """
 agent.py — Agent Initialization
 
-Constructs a LangChain ReAct AgentExecutor backed by Grok-1 (via the xAI API)
-and bound to the three code-review tools: JiraContextRetriever,
-GitDiffCollector, and RulesEngineReader.
+Constructs a LangChain ReAct agent backed by GroqCloud (OpenAI-compatible
+``ChatOpenAI`` endpoint) and bound to the three code-review tools:
+JiraContextRetriever, GitDiffCollector, and RulesEngineReader.
 
 The system prompt enforces a fixed tool invocation order and a structured
 Markdown report format, making reviews reproducible and thorough.
 """
 
 from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 
 from config import AppConfig
@@ -19,9 +18,7 @@ from tools.jira_tool import jira_context_retriever
 from tools.rules_tool import rules_engine_reader
 
 # ---------------------------------------------------------------------------
-# System prompt — defines the "Pedantic Senior Code Reviewer" persona,
-# enforces the Jira → Git diff → Rules tool invocation order, and specifies
-# the exact Markdown report structure the agent must produce.
+# System prompt — Pedantic Senior Code Reviewer
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = """\
@@ -56,68 +53,65 @@ After gathering all three context sources:
 
 ## Output Format (MANDATORY)
 
-Produce a Markdown report with EXACTLY this structure:
+Your **entire visible reply must be ONLY the report below.** Do not write workflow
+titles (no "Step 1", "## Step", thought traces, summaries, "final answer", or any
+Markdown **before** the top heading). Reason only inside tools or silently; stdout is
+report-only.
+
+The first characters of your message MUST be `#` beginning this exact skeleton
+(substitute the real ticket key from the human message for ``{ticket_id}``):
 
 # Code Review Report — {ticket_id}
 
 ## Missing Requirements
 - List each Jira acceptance criterion not addressed by the diff.
-- If all requirements are met, write: "None."
+- If all requirements are met, write: None.
 
 ## Code Quality Violations
 - List each standards violation found in the diff.
-- If no violations are found, write: "None."
+- If no violations are found, write: None.
 
 ## Suggested Fixes
 - For each issue listed above, provide a concrete, actionable recommendation.
-- If there are no issues, write: "None."
+- If there are no issues, write: None.
 
 ## Clean Pass (only when there are NO issues at all)
 
 If and only if there are zero missing requirements AND zero code quality
-violations, replace the entire report body with:
+violations, omit the bullet sections above instead and reply with ONLY:
+
+# Code Review Report — {ticket_id}
 
 > The code satisfies all requirements and standards.
 
 Be pedantic. Be precise. Do not omit any issue, no matter how minor.
 """
 
-# ---------------------------------------------------------------------------
-# Public factory function
-# ---------------------------------------------------------------------------
-
 
 def build_agent(config: AppConfig):
-    """Initialise and return a ReAct agent (CompiledStateGraph) for code review.
+    """Build a ReAct agent using Groq's OpenAI-compatible Chat Completions API.
 
-
-    Constructs a ``ChatOpenAI`` client targeting the xAI Grok API, binds the
-    three review tools, and wraps everything in a LangGraph ReAct agent
-    configured with the Pedantic Senior Code Reviewer system prompt.
+    Docs: https://docs.groq.com/api-reference/openai-compatible
 
     Args:
-        config: Populated ``AppConfig`` dataclass from ``load_config()``.
+        config: Populated ``AppConfig`` from ``load_config()``.
 
     Returns:
-        A ready-to-invoke ``CompiledStateGraph`` instance.
+        A LangGraph ``CompiledStateGraph`` instance.
     """
-    # --- Initialise the Grok LLM via the OpenAI-compatible xAI endpoint ---
     llm = ChatOpenAI(
-        model="grok-beta",
-        base_url="https://api.x.ai/v1",
-        api_key=config.xai_api_key,  # type: ignore[arg-type]
+        model=config.groq_model,
+        base_url=config.groq_api_base,
+        api_key=config.groq_api_key,  # type: ignore[arg-type]
+        model_kwargs={"parallel_tool_calls": False},
     )
 
-    # --- Collect the three review tools in the required invocation order ---
     tools = [
         jira_context_retriever,
         git_diff_collector,
         rules_engine_reader,
     ]
 
-    # --- Construct the ReAct agent with the system persona as the prompt ---
-    # langgraph's create_react_agent accepts a plain string or SystemMessage
-    # as the `prompt` parameter; it is prepended to every conversation.
     return create_react_agent(
         model=llm,
         tools=tools,

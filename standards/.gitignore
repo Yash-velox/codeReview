@@ -1,0 +1,36 @@
+# --- AI & Agent Specific ---
+.env
+*.log
+# Local vector database storage (ChromaDB, FAISS, etc.)
+/db/
+/chroma/
+/vector_store/
+# Agent execution traces and snapshots
+/traces/
+/snapshots/
+# Cached models or large binary downloads
+/models/
+*.bin
+*.pkl
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+env/
+venv/
+.pytest_cache/
+
+# --- Node.js / JavaScript ---
+node_modules/
+dist/
+.npm
+npm-debug.log*
+
+# --- Operating System & IDE ---
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+.venv/

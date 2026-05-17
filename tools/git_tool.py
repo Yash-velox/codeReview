@@ -20,7 +20,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from langchain_core.tools import Tool
+from langchain_core.tools import tool
 
 # Parent hops starting at cwd that may trigger sibling-repo discovery (scanning
 # immediate children for nested ``.git``). Limits accidental scans far up the tree.
@@ -201,20 +201,15 @@ def collect_git_diff(_: str = "") -> str:
 
 
 # ---------------------------------------------------------------------------
-# LangChain Tool registration
+# LangChain Tool registration (structured schema — required for Groq tool calling)
 # ---------------------------------------------------------------------------
 
-git_diff_collector = Tool(
-    name="git_diff_collector",
-    func=collect_git_diff,
-    description=(
-        "Captures staged changes via `git diff --staged`. Discovers **all** Git "
-        "repos tied to cwd: repos on the path from cwd upward, plus sibling "
-        "folders under the same umbrella that each have their own `.git` "
-        "(typical frontend/backend split). Concatenates labeled diffs when "
-        "multiple repos apply so one review can cover both. "
-        "Takes no meaningful input. "
-        "Returns combined diff text, a no-staged message listing repos checked, "
-        "or an error string."
-    ),
-)
+
+@tool
+def git_diff_collector() -> str:
+    """Capture staged ``git diff --staged`` for every Git repo tied to cwd.
+
+    Discovers repo roots upward from cwd and sibling clones under umbrella folders.
+    Returns one combined labeled diff string, a no-staged message, or an error text.
+    """
+    return collect_git_diff("")
