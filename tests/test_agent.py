@@ -3,8 +3,8 @@ tests/test_agent.py — Unit tests for agent.py (task 6.4) and
 property-based tests for Properties 9–10 (task 7.4).
 
 Unit tests verify:
-- ChatOpenAI is initialised with base_url="https://api.x.ai/v1"
-- ChatOpenAI receives the api_key from the AppConfig
+- ChatOpenAI is initialised with the configured OpenAI model and api_key
+- Optional OPENAI_BASE_URL is forwarded only when set on AppConfig
 - The system prompt contains the "Pedantic Senior Code Reviewer" persona text
 - The system prompt contains the required tool invocation order (Jira → Git → Rules)
 - The system prompt contains the required report sections
@@ -22,14 +22,16 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from config import AppConfig
+from config import DEFAULT_OPENAI_MODEL, AppConfig
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 _DUMMY_CONFIG = AppConfig(
-    xai_api_key="dummy-xai-key-12345",
+    openai_api_key="dummy-openai-key-12345",
+    openai_model=DEFAULT_OPENAI_MODEL,
+    openai_base_url=None,
     jira_url="https://example.atlassian.net",
     jira_email="test@example.com",
     jira_api_token="dummy-jira-token-67890",
@@ -60,18 +62,18 @@ def _build_agent_with_mocks():
 
 
 # ---------------------------------------------------------------------------
-# Unit test 1: base_url is set to the xAI endpoint
+# Unit test 1: default OpenAI endpoint (no custom base_url)
 # ---------------------------------------------------------------------------
 
 
-def test_build_agent_uses_xai_base_url():
-    """build_agent() must initialise ChatOpenAI with base_url='https://api.x.ai/v1'."""
+def test_build_agent_uses_openai_defaults_without_custom_base_url():
+    """Official OpenAI API: model + api_key only (no base_url kwarg)."""
     _, _, _, call_kwargs = _build_agent_with_mocks()
 
-    assert "base_url" in call_kwargs, "ChatOpenAI was not called with a base_url kwarg"
-    assert call_kwargs["base_url"] == "https://api.x.ai/v1", (
-        f"Expected base_url='https://api.x.ai/v1', got {call_kwargs['base_url']!r}"
+    assert "base_url" not in call_kwargs, (
+        "ChatOpenAI should not receive base_url when openai_base_url is unset"
     )
+    assert call_kwargs.get("model") == DEFAULT_OPENAI_MODEL
 
 
 # ---------------------------------------------------------------------------
@@ -80,14 +82,36 @@ def test_build_agent_uses_xai_base_url():
 
 
 def test_build_agent_passes_api_key_from_config():
-    """build_agent() must pass config.xai_api_key as the api_key to ChatOpenAI."""
+    """build_agent() must pass config.openai_api_key as the api_key to ChatOpenAI."""
     _, _, _, call_kwargs = _build_agent_with_mocks()
 
     assert "api_key" in call_kwargs, "ChatOpenAI was not called with an api_key kwarg"
-    assert call_kwargs["api_key"] == _DUMMY_CONFIG.xai_api_key, (
-        f"Expected api_key={_DUMMY_CONFIG.xai_api_key!r}, "
+    assert call_kwargs["api_key"] == _DUMMY_CONFIG.openai_api_key, (
+        f"Expected api_key={_DUMMY_CONFIG.openai_api_key!r}, "
         f"got {call_kwargs['api_key']!r}"
     )
+
+
+def test_build_agent_forwards_optional_openai_base_url():
+    cfg = AppConfig(
+        openai_api_key="k",
+        openai_model="gpt-4o-mini",
+        openai_base_url="https://proxy.example/v1",
+        jira_url="https://j.example.net",
+        jira_email="a@b.com",
+        jira_api_token="t",
+    )
+    mock_llm_instance = MagicMock()
+    with (
+        patch("agent.ChatOpenAI", return_value=mock_llm_instance) as mock_cls,
+        patch("agent.create_react_agent", return_value=MagicMock()),
+    ):
+        from agent import build_agent
+
+        build_agent(cfg)
+        call_kwargs = mock_cls.call_args.kwargs
+
+    assert call_kwargs["base_url"] == "https://proxy.example/v1"
 
 
 # ---------------------------------------------------------------------------

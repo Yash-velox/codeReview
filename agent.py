@@ -1,16 +1,15 @@
 """
 agent.py — Agent Initialization
 
-Constructs a LangChain ReAct AgentExecutor backed by Grok-1 (via the xAI API)
-and bound to the three code-review tools: JiraContextRetriever,
-GitDiffCollector, and RulesEngineReader.
+Constructs a LangChain ReAct agent backed by OpenAI-compatible Chat models
+(via ``langchain_openai.ChatOpenAI``) and bound to the three code-review tools:
+JiraContextRetriever, GitDiffCollector, and RulesEngineReader.
 
 The system prompt enforces a fixed tool invocation order and a structured
 Markdown report format, making reviews reproducible and thorough.
 """
 
 from langgraph.prebuilt import create_react_agent
-from langchain_core.messages import SystemMessage
 from langchain_openai import ChatOpenAI
 
 from config import AppConfig
@@ -90,10 +89,8 @@ Be pedantic. Be precise. Do not omit any issue, no matter how minor.
 def build_agent(config: AppConfig):
     """Initialise and return a ReAct agent (CompiledStateGraph) for code review.
 
-
-    Constructs a ``ChatOpenAI`` client targeting the xAI Grok API, binds the
-    three review tools, and wraps everything in a LangGraph ReAct agent
-    configured with the Pedantic Senior Code Reviewer system prompt.
+    Constructs ``ChatOpenAI`` using ``OPENAI_API_KEY`` / optional ``OPENAI_MODEL``
+    / optional ``OPENAI_BASE_URL`` from ``AppConfig``.
 
     Args:
         config: Populated ``AppConfig`` dataclass from ``load_config()``.
@@ -101,23 +98,21 @@ def build_agent(config: AppConfig):
     Returns:
         A ready-to-invoke ``CompiledStateGraph`` instance.
     """
-    # --- Initialise the Grok LLM via the OpenAI-compatible xAI endpoint ---
-    llm = ChatOpenAI(
-        model="grok-beta",
-        base_url="https://api.x.ai/v1",
-        api_key=config.xai_api_key,  # type: ignore[arg-type]
-    )
+    llm_kwargs: dict = {
+        "model": config.openai_model,
+        "api_key": config.openai_api_key,  # type: ignore[arg-type]
+    }
+    if config.openai_base_url:
+        llm_kwargs["base_url"] = config.openai_base_url
 
-    # --- Collect the three review tools in the required invocation order ---
+    llm = ChatOpenAI(**llm_kwargs)
+
     tools = [
         jira_context_retriever,
         git_diff_collector,
         rules_engine_reader,
     ]
 
-    # --- Construct the ReAct agent with the system persona as the prompt ---
-    # langgraph's create_react_agent accepts a plain string or SystemMessage
-    # as the `prompt` parameter; it is prepended to every conversation.
     return create_react_agent(
         model=llm,
         tools=tools,
